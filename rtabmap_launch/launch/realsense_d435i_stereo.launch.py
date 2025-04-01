@@ -75,5 +75,5 @@ def generate_launch_description():
             parameters=[{'use_mag': False, 
                          'world_frame':'enu', 
                          'publish_tf':False}],
-            remappings=[('imu/data_raw', '/camera/camera/imu')]),
+            remappings=[('imu/data_raw', '/mav/imu/data_raw')]),
     ])
