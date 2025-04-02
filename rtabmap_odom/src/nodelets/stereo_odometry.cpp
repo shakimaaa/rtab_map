@@ -49,6 +49,7 @@ using namespace rtabmap;
 namespace rtabmap_odom
 {
 
+// 构造函数，初始化成员变量
 StereoOdometry::StereoOdometry(const rclcpp::NodeOptions & options) :
 		rtabmap_odom::OdometryROS("stereo_odometry", options),
 		approxSync_(0),
@@ -63,13 +64,14 @@ StereoOdometry::StereoOdometry(const rclcpp::NodeOptions & options) :
 		exactSync5_(0),
 		approxSync6_(0),
 		exactSync6_(0),
-		topicQueueSize_(10),
-		syncQueueSize_(5),
-		keepColor_(false)
+		topicQueueSize_(10), // 储存订阅消息的队列大小
+		syncQueueSize_(5), // 同步队列大小
+		keepColor_(false) // 是否保持颜色
 {
-	OdometryROS::init(true, true, false);
+	OdometryROS::init(true, true, false); // 调用OdometryROS类的函数进行初始化
 }
 
+// 析勾函数，清理在构造函数内分配的资源
 StereoOdometry::~StereoOdometry()
 {
 	delete approxSync_;

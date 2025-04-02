@@ -212,7 +212,8 @@ OdometryROS::~OdometryROS()
 	delete odometry_;
 }
 
-void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams)
+// 初始化与里程计相关的参数、服务、订阅
+void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams) // 立体视觉、可视化参数、ICP迭代最近点
 {
 	stereoParams_ = stereoParams;
 	visParams_ = visParams;
@@ -220,10 +221,11 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams)
 
 	//parameters
 	RCLCPP_INFO(get_logger(), "Odometry: stereoParams_=%d visParams_=%d icpParams_=%d", stereoParams_?1:0, visParams_?1:0, icpParams_?1:0);
-	parameters_ = Parameters::getDefaultOdometryParameters(stereoParams_, visParams_, icpParams_);
+	parameters_ = Parameters::getDefaultOdometryParameters(stereoParams_, visParams_, icpParams_); // 获取默认里程计参数
+	// 如果启用 ICP
 	if(icpParams_)
 	{
-		if(!visParams_)
+		if(!visParams_) // 根据是否启用了视觉参数决定ICP的策略
 		{
 			uInsert(parameters_, ParametersPair(Parameters::kRegStrategy(), "1"));
 		}
@@ -233,15 +235,17 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams)
 		}
 	}
 	parameters_.insert(*Parameters::getDefaultParameters().find(Parameters::kRtabmapImagesAlreadyRectified()));
+	// 如果指定了配置文件，会加载文件中的参数
 	if(!configPath_.empty())
 	{
 		if(UFile::exists(configPath_.c_str()))
 		{
 			RCLCPP_INFO(this->get_logger(), "Odometry: Loading parameters from %s", configPath_.c_str());
 			rtabmap::ParametersMap allParameters;
-			Parameters::readINI(configPath_.c_str(), allParameters);
+			Parameters::readINI(configPath_.c_str(), allParameters); // 读取INI格式的配置文件
 			// only update odometry parameters
-			for(ParametersMap::iterator iter=parameters_.begin(); iter!=parameters_.end(); ++iter)
+			// 更新odometry参数
+			for(ParametersMap::iterator iter=parameters_.begin(); iter!=parameters_.end(); ++iter) 
 			{
 				ParametersMap::iterator jter = allParameters.find(iter->first);
 				if(jter!=allParameters.end())
@@ -256,11 +260,13 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams)
 		}
 	}
 
+	// 设置ros2节点参数
 	for(rtabmap::ParametersMap::iterator iter=parameters_.begin(); iter!=parameters_.end(); ++iter)
 	{
 		rclcpp::Parameter parameter;
-		std::string vStr = this->declare_parameter(iter->first, iter->second); 
-	 	if(vStr.compare(iter->second)!=0)
+		std::string vStr = this->declare_parameter(iter->first, iter->second); // 注册到参数服务器
+	 	// 参数服务器的数据和默认值不同，会更新 parameters_ 的值
+		if(vStr.compare(iter->second)!=0)
 		{
 			RCLCPP_INFO(this->get_logger(), "Setting odometry parameter \"%s\"=\"%s\"", iter->first.c_str(), vStr.c_str());
 			iter->second = vStr;
@@ -273,27 +279,29 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams)
 		}
 	}
 
-	std::vector<std::string> tmpList = this->get_node_options().arguments();
+	std::vector<std::string> tmpList = this->get_node_options().arguments(); // 获取传入的命令行参数
 	std::vector<std::string> argList;
 	for(unsigned int i=0; i<tmpList.size(); ++i)
 	{
 	    // Issue with ros2 launch files in which we cannot pass a 
 	    // list of strings as argument (they will appear in same string)
-	    std::list<std::string> v = uSplit(tmpList[i]);
+	    // 分割命令行参数可能包含的字符串列表
+		std::list<std::string> v = uSplit(tmpList[i]);
 	    for(std::list<std::string>::iterator iter=v.begin(); iter!=v.end(); ++iter)
 	    {
 	        argList.push_back(*iter);
 	    }
 	}
-	
+	// 分割后的命令行参数转化为字符数组
 	char ** argv = new char*[argList.size()];
 	for(unsigned int i=0; i<argList.size(); ++i)
 	{
 		argv[i] = &argList[i].at(0);
 	}
 
+	// 解析命令行参数并更新参数
 	rtabmap::ParametersMap parameters = rtabmap::Parameters::parseArguments(argList.size(), argv);
-	delete [] argv;
+	delete [] argv; // 删除字符数组
 	for(rtabmap::ParametersMap::iterator iter=parameters.begin(); iter!=parameters.end(); ++iter)
 	{
 		rtabmap::ParametersMap::iterator jter = parameters_.find(iter->first);
@@ -350,12 +358,14 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams)
 
 	this->updateParameters(parameters_);
 
+	// 创建并重建里程计对象
 	odometry_ = Odometry::create(parameters_);
-	if(!initialPose_.isIdentity())
+	if(!initialPose_.isIdentity()) // 如果有初始位姿则重置里程计
 	{
 		odometry_->reset(initialPose_);
 	}
 
+	// 创建一系列服务
 	resetSrv_ = this->create_service<std_srvs::srv::Empty>("reset_odom", std::bind(&OdometryROS::resetOdom, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 	resetToPoseSrv_ = this->create_service<rtabmap_msgs::srv::ResetPose>("reset_odom_to_pose", std::bind(&OdometryROS::resetToPose, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 	pauseSrv_ = this->create_service<std_srvs::srv::Empty>("pause_odom", std::bind(&OdometryROS::pause, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
@@ -366,15 +376,17 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams)
 	setLogWarnSrv_ = this->create_service<std_srvs::srv::Empty>("log_warning", std::bind(&OdometryROS::setLogWarn, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 	setLogErrorSrv_ = this->create_service<std_srvs::srv::Empty>("log_error", std::bind(&OdometryROS::setLogError, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
+	// 设置默认的里程计
 	odomStrategy_ = 0;
 	Parameters::parse(this->parameters(), Parameters::kOdomStrategy(), odomStrategy_);
+	// imu接入
 	if(waitIMUToinit_)
 	{
 		imuCallbackGroup_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 		rclcpp::SubscriptionOptions options;
 		options.callback_group = imuCallbackGroup_;
-		int queueSize = this->declare_parameter("imu_queue_size", 200);
-		int qosImu = this->declare_parameter("qos_imu", (int)qos_);
+		int queueSize = this->declare_parameter("imu_queue_size", 200); // imu队列大小
+		int qosImu = this->declare_parameter("qos_imu", (int)qos_); // qos级别
 		imuSub_ = create_subscription<sensor_msgs::msg::Imu>("imu", rclcpp::QoS(queueSize).reliability((rmw_qos_reliability_policy_t)qosImu), std::bind(&OdometryROS::callbackIMU, this, std::placeholders::_1), options);
 		RCLCPP_INFO(this->get_logger(), "odometry: Subscribing to IMU topic %s", imuSub_->get_topic_name());
 		RCLCPP_INFO(this->get_logger(), "odometry: qos_imu = %d", qosImu);

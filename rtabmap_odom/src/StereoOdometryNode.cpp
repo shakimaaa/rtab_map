@@ -33,24 +33,25 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 int main(int argc, char **argv)
 {
-	ULogger::setType(ULogger::kTypeConsole);
-	ULogger::setLevel(ULogger::kWarning);
+	ULogger::setType(ULogger::kTypeConsole); // 设置输出为控制台类型
+	ULogger::setLevel(ULogger::kWarning); // 日志级别为警告
 
 	// process "--params" argument
-	std::vector<std::string> arguments;
+	// 处理 参数
+	std::vector<std::string> arguments; // 创建一个字符串向量来储存命令行参数
 	for(int i=1;i<argc;++i)
 	{
 		if(strcmp(argv[i], "--params") == 0)
 		{
-			rtabmap::ParametersMap parametersOdom = rtabmap::Parameters::getDefaultOdometryParameters(true);
+			rtabmap::ParametersMap parametersOdom = rtabmap::Parameters::getDefaultOdometryParameters(true); // 获取默认里程计参数
 			for(rtabmap::ParametersMap::iterator iter=parametersOdom.begin(); iter!=parametersOdom.end(); ++iter)
 			{
-				std::string str = "Param: " + iter->first + " = \"" + iter->second + "\"";
-				std::cout <<
+				std::string str = "Param: " + iter->first + " = \"" + iter->second + "\""; // 构建参数输出字符串
+				std::cout << 
 						str <<
 						std::setw(60 - str.size()) <<
 						" [" <<
-						rtabmap::Parameters::getDescription(iter->first).c_str() <<
+						rtabmap::Parameters::getDescription(iter->first).c_str() <<  // 获取附加参数的描述
 						"]" <<
 						std::endl;
 			}
@@ -66,7 +67,7 @@ int main(int argc, char **argv)
 		{
 			ULogger::setLevel(ULogger::kInfo);
 		}
-		arguments.push_back(argv[i]);
+		arguments.push_back(argv[i]); // 将命令行参数添加到aruements中
 
 	}
 
@@ -77,7 +78,7 @@ int main(int argc, char **argv)
 	rclcpp::NodeOptions options;
 	options.arguments(arguments);
 	auto node = std::make_shared<rtabmap_odom::StereoOdometry>(options);
-	rclcpp::executors::MultiThreadedExecutor executor;
+	rclcpp::executors::MultiThreadedExecutor executor; // 多线程执行器
 	executor.add_node(node);
 	executor.spin();
 	rclcpp::shutdown();
