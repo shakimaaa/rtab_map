@@ -317,6 +317,7 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams) // 立
 	}
 
 	// Backward compatibility
+	// 参数相关设置
 	for(std::map<std::string, std::pair<bool, std::string> >::const_iterator iter=Parameters::getRemovedParameters().begin();
 		iter!=Parameters::getRemovedParameters().end();
 		++iter)
@@ -387,15 +388,16 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams) // 立
 		options.callback_group = imuCallbackGroup_;
 		int queueSize = this->declare_parameter("imu_queue_size", 200); // imu队列大小
 		int qosImu = this->declare_parameter("qos_imu", (int)qos_); // qos级别
+		// 订阅imu话题绑定回调函数
 		imuSub_ = create_subscription<sensor_msgs::msg::Imu>("imu", rclcpp::QoS(queueSize).reliability((rmw_qos_reliability_policy_t)qosImu), std::bind(&OdometryROS::callbackIMU, this, std::placeholders::_1), options);
 		RCLCPP_INFO(this->get_logger(), "odometry: Subscribing to IMU topic %s", imuSub_->get_topic_name());
 		RCLCPP_INFO(this->get_logger(), "odometry: qos_imu = %d", qosImu);
 		RCLCPP_INFO(this->get_logger(), "odometry: imu_queue_size = %d", queueSize);
 	}
 
-	this->start();
+	this->start(); // 启动里程计
 
-	onOdomInit();
+	onOdomInit(); // 执行里程计初始化后的操作
 }
 
 void OdometryROS::initDiagnosticMsg(const std::string & subscribedTopicsMsg, bool approxSync, const std::string & subscribedTopic)
@@ -427,17 +429,22 @@ rtabmap::Transform OdometryROS::velocityGuess() const
 
 void OdometryROS::callbackIMU(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
+	// 如果系统没有被暂停
 	if(!this->isPaused())
 	{
+		// 获取imu时间戳，转换成ros格式
 		double stamp = rtabmap_conversions::timestampFromROS(msg->header.stamp);
 		//RCLCPP_WARN(get_logger(), "Received imu: %f delay=%f", stamp, (now() - msg->header.stamp).seconds());
 
 		{
+			// 锁定IMU数据互斥锁，确保线程安全
 			UScopeMutex m(imuMutex_);
-
+			// imu没有处理完且队列为空
 			if(!imuProcessed_ && imus_.empty())
 			{
+				// 获取当前imu的坐标变换
 				rtabmap::Transform localTransform = rtabmap_conversions::getTransform(this->frameId(), msg->header.frame_id, msg->header.stamp, *tfBuffer_, waitForTransform_);
+				// 如果无法获得有效的坐标变换，丢弃当前imu数据
 				if(localTransform.isNull())
 				{
 					RCLCPP_WARN(this->get_logger(), "Dropping imu data! A valid TF between %s and %s is required to initialize IMU.",
@@ -446,22 +453,25 @@ void OdometryROS::callbackIMU(const sensor_msgs::msg::Imu::SharedPtr msg)
 				}
 			}
 
-			imus_.insert(std::make_pair(stamp, msg));
+			imus_.insert(std::make_pair(stamp, msg)); // imu消息存入队列
 
+			// 数据超过1000就丢弃
 			if(imus_.size() > 1000)
 			{
 				RCLCPP_WARN(this->get_logger(), "Dropping imu data!");
 				imus_.erase(imus_.begin());
 			}
 		}
+		// 尝试锁定数据互斥锁，进行数据处理同步
 		if(dataMutex_.lockTry() == 0)
-		{
-			if(bufferedDataToProcess_ && rtabmap_conversions::timestampFromROS(dataHeaderToProcess_.stamp) <= stamp)
+		{	
+			// 如果缓冲区处理且要处理的数据时间戳小于当前imu数据
+			if(bufferedDataToProcess_ && rtabmap_conversions::timestampFromROS(dataHeaderToProcess_.stamp) <= stamp) 
 			{
 				bufferedDataToProcess_ = false;
 				dataReady_.release();
 			}
-			dataMutex_.unlock();
+			dataMutex_.unlock(); // 解锁互斥锁
 		}
 	}
 }
@@ -469,18 +479,20 @@ void OdometryROS::callbackIMU(const sensor_msgs::msg::Imu::SharedPtr msg)
 void OdometryROS::processData(SensorData & data, const std_msgs::msg::Header & header)
 {
 	//RCLCPP_WARN(get_logger(), "Received image: %f delay=%f", data.stamp(), (now() - header.stamp).seconds());
+	// 加锁防止同时被多个线程访问
 	if(dataMutex_.lockTry() == 0)
 	{
+		// 如果有数据正在被处理并且图像的时间戳比当前更晚，丢弃当前图片
 		if(bufferedDataToProcess_) {
 			RCLCPP_ERROR(this->get_logger(), "We didn't receive IMU newer than previous image (%f) and we just received a new image (%f). The previous image is dropped!",
 						rtabmap_conversions::timestampFromROS(dataHeaderToProcess_.stamp), rtabmap_conversions::timestampFromROS(header.stamp));
 			++droppedMsgs_;
 		}
-		dataToProcess_ = data;
+		dataToProcess_ = data; // 更新要处理的数据加入到线程共享资源内
 		dataHeaderToProcess_ = header;
 		bufferedDataToProcess_ = false;
-		dataReady_.release();
-		dataMutex_.unlock();
+		dataReady_.release(); // 其他线程可以通过这个信号开始处理数据
+		dataMutex_.unlock(); // 允许其他线程访问共享资源
 		++processedMsgs_;
 	}
 	else
@@ -498,30 +510,33 @@ void OdometryROS::mainLoopKill()
 
 void OdometryROS::mainLoop()
 {
-	dataReady_.acquire();
+	dataReady_.acquire(); // 等待数据准备好
 
-	if(!this->isRunning())
+	if(!this->isRunning()) // 如果当前对象不再运行就返回
 	{
 		// thread killed
 		return;
 	}
 
-	UScopeMutex lock(dataMutex_);
+	UScopeMutex lock(dataMutex_); // 锁定数据处理
 
 	// aliases
+	// 获取传感器数据和头部信息
 	SensorData & data = dataToProcess_;
 	std_msgs::msg::Header & header = dataHeaderToProcess_;
 
+	// 储存imu数据
 	std::vector<std::pair<double, sensor_msgs::msg::Imu::ConstSharedPtr> > imus;
 	{
-		UScopeMutex m(imuMutex_);
-	
+		UScopeMutex m(imuMutex_); // 获取imu数据
+		// 如果等待IMU数据初始化，并且当前没有imu数据
 		if((waitIMUToinit_ && !imuProcessed_) && odometry_->framesProcessed() == 0 && odometry_->getPose().isIdentity() && imus_.empty())
 		{
 			RCLCPP_WARN(this->get_logger(), "odometry: waiting imu (%s) to initialize orientation (wait_imu_to_init=true)", imuSub_->get_topic_name());
 			return;
 		}
 
+		// 如果没有收到imu数据或者imu数据早于当前图像时间戳
 		if(waitIMUToinit_ && (imus_.empty() || imus_.rbegin()->first < rtabmap_conversions::timestampFromROS(header.stamp)))
 		{
 			RCLCPP_WARN(this->get_logger(), "Make sure IMU is published faster than data rate! (last image stamp=%f and last imu stamp received=%f). Buffering the image until an imu with same or greater stamp is received.",
@@ -530,6 +545,7 @@ void OdometryROS::mainLoop()
 			return;
 		}
 		// process all imu data up to current image stamp (or just after so that underlying odom approach can do interpolation of imu at image stamp)
+		// 处理所有imu数据直到当前图像的世界
 		std::map<double, sensor_msgs::msg::Imu::ConstSharedPtr>::iterator iterEnd = imus_.lower_bound(rtabmap_conversions::timestampFromROS(header.stamp));
 		if(iterEnd!= imus_.end())
 		{
@@ -550,6 +566,7 @@ void OdometryROS::mainLoop()
 			if(this->frameId().compare(imus[i].second->header.frame_id) != 0)
 			{
 				// We should not have to wait for IMU TF (imu delay <<< sensor data delay), so don't
+				// imu数据变换
 				rtabmap::Transform localTransform = rtabmap_conversions::getTransform(this->frameId(), imus[i].second->header.frame_id, imus[i].second->header.stamp, *tfBuffer_, 0);
 				if(localTransform.isNull())
 				{

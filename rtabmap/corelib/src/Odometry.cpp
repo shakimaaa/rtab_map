@@ -302,19 +302,23 @@ Transform Odometry::process(SensorData & data, OdometryInfo * info)
 
 Transform Odometry::process(SensorData & data, const Transform & guessIn, OdometryInfo * info)
 {
+	// 确保数据id有效
 	UASSERT_MSG(data.id() >= 0, uFormat("Input data should have ID greater or equal than 0 (id=%d)!", data.id()).c_str());
 
 	// cache imu data
+	// 如果imu不为空，如果不能异步处理
 	if(!data.imu().empty() && !this->canProcessAsyncIMU())
 	{
 		if(!(data.imu().orientation()[0] == 0.0 && data.imu().orientation()[1] == 0.0 && data.imu().orientation()[2] == 0.0))
 		{
 			Transform orientation(0,0,0, data.imu().orientation()[0], data.imu().orientation()[1], data.imu().orientation()[2], data.imu().orientation()[3]);
 			// orientation includes roll and pitch but not yaw in local transform
+			// 计算imu的变换 将 IMU 数据从 原始传感器坐标系 转换到 目标坐标系
 			Transform imuT = Transform(data.imu().localTransform().x(),data.imu().localTransform().y(),data.imu().localTransform().z(), 0,0,data.imu().localTransform().theta()) *
 					orientation*
 					data.imu().localTransform().rotation().inverse();
 
+			// 初始化位姿
 			if(	this->getPose().r11() == 1.0f && this->getPose().r22() == 1.0f && this->getPose().r33() == 1.0f &&
 				this->framesProcessed() == 0)
 			{
@@ -325,6 +329,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 				this->reset(newFramePose);
 			}
 
+			// 缓存IMU数据
 			imus_.insert(std::make_pair(data.stamp(), imuT));
 			if(imus_.size() > 1000)
 			{
@@ -337,6 +342,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 		}
 	}
 
+	// 图像数据处理
 	if(!data.imageRaw().empty())
 	{
 		UDEBUG("Processing image data %dx%d: rgbd models=%ld, stereo models=%ld",
@@ -346,7 +352,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			data.stereoCameraModels().size());
 	}
 
-
+	// 矫正立体图像
 	if(!_imagesAlreadyRectified && !this->canProcessRawImages() && !data.imageRaw().empty())
 	{
 		if(!data.stereoCameraModels().empty())

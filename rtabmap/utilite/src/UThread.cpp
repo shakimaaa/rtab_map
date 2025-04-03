@@ -119,29 +119,33 @@ void UThread::join(bool killFirst)
 #endif
 }
 
+// 启动一个线程
 void UThread::start()
 {
 #if PRINT_DEBUG
 	ULOGGER_DEBUG("");
 #endif
-
+	// 如果线程空闲或者被杀死可以启动
     if(state_ == kSIdle || state_ == kSKilled)
     {
+		// 如果被杀死确保完成清理
     	if(state_ == kSKilled)
     	{
 			// make sure it is finished
+			// 锁住互斥锁
 			runningMutex_.lock();
 			runningMutex_.unlock();
     	}
-
+		// 线程正在创建
         state_ = kSCreating;
-        int r = UThreadC<void>::Create(threadId_, &handle_, true); // Create detached
-        if(r)
+        int r = UThreadC<void>::Create(threadId_, &handle_, true); // Create detached 传入线程id，true线程运行完自动释放内存
+        // 如果失败打印并重置状态
+		if(r)
         {
         	UERROR("Failed to create a thread! errno=%d", r);
-        	threadId_=0;
-        	handle_=0;
-        	state_ = kSIdle;
+        	threadId_=0; // 重置id
+        	handle_=0; // 重置句柄
+        	state_ = kSIdle; // 状态为空闲
         }
         else
         {

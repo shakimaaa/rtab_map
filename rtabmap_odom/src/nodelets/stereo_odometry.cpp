@@ -90,14 +90,17 @@ StereoOdometry::~StereoOdometry()
 
 void StereoOdometry::onOdomInit()
 {
-	bool approxSync = false;
-	bool subscribeRGBD = false;
-	double approxSyncMaxInterval = 0.0;
+	// 默认值初始化
+	bool approxSync = false; // 是否近似同步
+	bool subscribeRGBD = false; // 是否订阅RGBD
+	double approxSyncMaxInterval = 0.0; // 近似同步最大间隔
 	int rgbdCameras = 1;
+
+	// 从参数服务器获取参数数值
 	approxSync = this->declare_parameter("approx_sync", approxSync);
 	approxSyncMaxInterval = this->declare_parameter("approx_sync_max_interval", approxSyncMaxInterval);
-	topicQueueSize_ = this->declare_parameter("topic_queue_size", topicQueueSize_);
-	int queueSize = this->declare_parameter("queue_size", -1);
+	topicQueueSize_ = this->declare_parameter("topic_queue_size", topicQueueSize_); // 订阅队列大小
+	int queueSize = this->declare_parameter("queue_size", -1); // 设置同步队列大小
 	if(queueSize != -1)
 	{
 		syncQueueSize_ = queueSize;
@@ -106,11 +109,11 @@ void StereoOdometry::onOdomInit()
 				 "in future versions! The value (%d) is copied to "
 				 "\"sync_queue_size\".", syncQueueSize_);
 	}
-	syncQueueSize_ = this->declare_parameter("sync_queue_size", syncQueueSize_);
-	int qosCamInfo = this->declare_parameter("qos_camera_info", (int)qos());
-	subscribeRGBD = this->declare_parameter("subscribe_rgbd", subscribeRGBD);
-	rgbdCameras = this->declare_parameter("rgbd_cameras", rgbdCameras);
-	keepColor_ = this->declare_parameter("keep_color", keepColor_);
+	syncQueueSize_ = this->declare_parameter("sync_queue_size", syncQueueSize_); // 获取同步队列的大小
+	int qosCamInfo = this->declare_parameter("qos_camera_info", (int)qos()); // 获取摄像头信息的qos
+	subscribeRGBD = this->declare_parameter("subscribe_rgbd", subscribeRGBD); // 是否订阅rgbd
+	rgbdCameras = this->declare_parameter("rgbd_cameras", rgbdCameras); // 相机数量
+	keepColor_ = this->declare_parameter("keep_color", keepColor_); // 是否保持颜色
 
 	RCLCPP_INFO(this->get_logger(), "StereoOdometry: approx_sync = %s", approxSync?"true":"false");
 	if(approxSync)
@@ -122,11 +125,12 @@ void StereoOdometry::onOdomInit()
 	RCLCPP_INFO(this->get_logger(), "StereoOdometry: subscribe_rgbd = %s", subscribeRGBD?"true":"false");
 	RCLCPP_INFO(this->get_logger(), "StereoOdometry: keep_color     = %s", keepColor_?"true":"false");
 
+	// 创建订阅选项并初始化回调组
 	rclcpp::SubscriptionOptions options;
-	options.callback_group = dataCallbackGroup_;
+	options.callback_group = dataCallbackGroup_; // 设置回调组
 
-	std::string subscribedTopic;
-	std::string subscribedTopicsMsg;
+	std::string subscribedTopic; // 订阅的话题名
+	std::string subscribedTopicsMsg; // 订阅的话题的信息
 	if(subscribeRGBD)
 	{
 		if(rgbdCameras >= 2)
@@ -349,21 +353,26 @@ void StereoOdometry::onOdomInit()
 	}
 	else
 	{
+		// 设置TransportHints 用于图像传输的配置
 		image_transport::TransportHints hints(this);
 		imageRectLeft_.subscribe(this, "left/image_rect", hints.getTransport(), rclcpp::QoS(topicQueueSize_).reliability((rmw_qos_reliability_policy_t)qos()).get_rmw_qos_profile(), options);
 		imageRectRight_.subscribe(this, "right/image_rect", hints.getTransport(), rclcpp::QoS(topicQueueSize_).reliability((rmw_qos_reliability_policy_t)qos()).get_rmw_qos_profile(), options);
 		cameraInfoLeft_.subscribe(this, "left/camera_info", rclcpp::QoS(topicQueueSize_).reliability((rmw_qos_reliability_policy_t)qosCamInfo).get_rmw_qos_profile(), options);
 		cameraInfoRight_.subscribe(this, "right/camera_info", rclcpp::QoS(topicQueueSize_).reliability((rmw_qos_reliability_policy_t)qosCamInfo).get_rmw_qos_profile(), options);
 
+		// 图像同步器
 		if(approxSync)
 		{
+			// 如果开启近似同步，使用Synchronizer 进行图像同步
 			approxSync_ = new message_filters::Synchronizer<MyApproxSyncPolicy>(MyApproxSyncPolicy(syncQueueSize_), imageRectLeft_, imageRectRight_, cameraInfoLeft_, cameraInfoRight_);
 			if(approxSyncMaxInterval>0.0)
 				approxSync_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(approxSyncMaxInterval));
+			// 注册回调函数
 			approxSync_->registerCallback(std::bind(&StereoOdometry::callback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
 		}
 		else
 		{
+			// 精确同步器
 			exactSync_ = new message_filters::Synchronizer<MyExactSyncPolicy>(MyExactSyncPolicy(syncQueueSize_), imageRectLeft_, imageRectRight_, cameraInfoLeft_, cameraInfoRight_);
 			exactSync_->registerCallback(std::bind(&StereoOdometry::callback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
 		}
@@ -401,26 +410,32 @@ void StereoOdometry::commonCallback(
 		const std::vector<sensor_msgs::msg::CameraInfo>& leftCameraInfos,
 		const std::vector<sensor_msgs::msg::CameraInfo>& rightCameraInfos)
 {
+	// 断言确保输入的左右的图像和信息数量一致
 	UASSERT(leftImages.size() > 0 &&
 			leftImages.size() == rightImages.size() &&
 			leftImages.size() == leftCameraInfos.size() &&
 			rightImages.size() == rightCameraInfos.size());
 	rclcpp::Time higherStamp;
+	// 获取左右图像的高度和宽度
 	int leftWidth = leftImages[0]->image.cols;
 	int leftHeight = leftImages[0]->image.rows;
 	int rightWidth = rightImages[0]->image.cols;
 	int rightHeight = rightImages[0]->image.rows;
 
+	// 确保尺寸一致
 	UASSERT_MSG(
 			leftWidth == rightWidth && leftHeight == rightHeight,
 		uFormat("left=%dx%d right=%dx%d", leftWidth, leftHeight, rightWidth, rightHeight).c_str());
 
 	int cameraCount = leftImages.size();
+	// 左右图像的Mat
 	cv::Mat left;
 	cv::Mat right;
-	std::vector<rtabmap::StereoCameraModel> cameraModels;
+	std::vector<rtabmap::StereoCameraModel> cameraModels; // Stereo 相机模型的容器
+	// 遍历每对图像（左右）
 	for(unsigned int i=0; i<leftImages.size(); ++i)
 	{
+		// 检查图像编码类型
 		if(!(leftImages[i]->encoding.compare(sensor_msgs::image_encodings::TYPE_8UC1) ==0 ||
 			 leftImages[i]->encoding.compare(sensor_msgs::image_encodings::MONO8) ==0 ||
 			 leftImages[i]->encoding.compare(sensor_msgs::image_encodings::MONO16) ==0 ||
@@ -441,8 +456,10 @@ void StereoOdometry::commonCallback(
 			return;
 		}
 
+		// 获取左右图像中较新的时间戳
 		rclcpp::Time stamp = rtabmap_conversions::timestampFromROS(leftImages[i]->header.stamp)>rtabmap_conversions::timestampFromROS(rightImages[i]->header.stamp)?leftImages[i]->header.stamp:rightImages[i]->header.stamp;
-
+		
+		// 更新较新的时间戳
 		if(i == 0)
 		{
 			higherStamp = stamp;
@@ -452,14 +469,16 @@ void StereoOdometry::commonCallback(
 			higherStamp = stamp;
 		}
 
+		// 获得当前图像的TF变换
 		Transform localTransform = rtabmap_conversions::getTransform(this->frameId(), leftImages[i]->header.frame_id, stamp, tfBuffer(), waitForTransform());
-		if(localTransform.isNull())
+		if(localTransform.isNull()) // 变换为空返回
 		{
 			return;
 		}
 
 		if(i>0)
-		{
+		{	
+			// 计算时间差
 			double stampDiff = fabs(rtabmap_conversions::timestampFromROS(leftImages[i]->header.stamp) - rtabmap_conversions::timestampFromROS(leftImages[i-1]->header.stamp));
 			if(stampDiff > 1.0/60.0)
 			{
@@ -482,14 +501,15 @@ void StereoOdometry::commonCallback(
 
 		if(!leftImages[i]->image.empty() && !rightImages[i]->image.empty())
 		{
-			bool alreadyRectified = true;
+			bool alreadyRectified = true; // 是否及已经进行矫正
 			Parameters::parse(parameters(), Parameters::kRtabmapImagesAlreadyRectified(), alreadyRectified);
 			rtabmap::Transform stereoTransform;
+			// 如果没有进行矫正 获取左右相机的tf转换
 			if(!alreadyRectified)
 			{
 				if(rightCameraInfos[i].header.frame_id.empty() || leftCameraInfos[i].header.frame_id.empty())
 				{
-					if(rightCameraInfos[i].p[3] == 0.0 && leftCameraInfos[i].p[3] == 0)
+					if(rightCameraInfos[i].p[3] == 0.0 && leftCameraInfos[i].p[3] == 0) // 评议4部分如果为零
 					{
 						RCLCPP_ERROR(this->get_logger(), "Parameter %s is false but the frame_id in one of the camera_info "
 								"topic is empty, so TF between the cameras cannot be computed!",
@@ -504,7 +524,7 @@ void StereoOdometry::commonCallback(
 								leftCameraInfos[i].header.stamp,
 								tfBuffer(),
 								waitForTransform());
-						if(stereoTransform.isNull())
+						if(stereoTransform.isNull()) // 如果没有获得左右相机的tf打印警告
 						{
 							RCLCPP_ERROR(this->get_logger(), "Parameter %s is false but we cannot get TF between the two cameras! (between frames %s and %s)",
 									Parameters::kRtabmapImagesAlreadyRectified().c_str(),
@@ -512,7 +532,7 @@ void StereoOdometry::commonCallback(
 									leftCameraInfos[i].header.frame_id.c_str());
 							return;
 						}
-						else if(stereoTransform.isIdentity())
+						else if(stereoTransform.isIdentity()) // 如果是单位矩阵，即没有有效变换
 						{
 							RCLCPP_ERROR(this->get_logger(), "Parameter %s is false but we cannot get a valid TF between the two cameras! "
 									"Identity transform returned between left and right cameras. Verify that if TF between "
@@ -524,9 +544,11 @@ void StereoOdometry::commonCallback(
 						}
 					}
 				}
-
+				// 使用得到的信息和变换构建相机模型
+				// localTransform：camera_link -> camera_infra1_optical_frame  stereoTransform: 左右相机tf
 				rtabmap::StereoCameraModel stereoModel = rtabmap_conversions::stereoCameraModelFromROS(leftCameraInfos[i], rightCameraInfos[i], localTransform, stereoTransform);
 
+				// 如果相机模型基线为零，且图像已较正检查相机之间的变换
 				if( stereoModel.baseline() == 0 &&
 					alreadyRectified &&
 					!rightCameraInfos[i].header.frame_id.empty() &&
@@ -543,6 +565,7 @@ void StereoOdometry::commonCallback(
 					{
 						static bool warned = false;
 						if(!warned)
+						// 如果tf为空但是可以通过校准得到基线信息
 						{
 							RCLCPP_WARN(this->get_logger(), "Parameter %s is false but the frame_id in one of the "
 									"camera_info topic is empty, so TF between the cameras cannot be "
@@ -553,7 +576,7 @@ void StereoOdometry::commonCallback(
 						}
 					}
 				}
-				else
+				else // 图像已经矫正，获取相机间的tf转换
 				{
 					stereoTransform = rtabmap_conversions::getTransform(
 							rightCameraInfos[i].header.frame_id,
@@ -561,7 +584,7 @@ void StereoOdometry::commonCallback(
 							leftCameraInfos[i].header.stamp,
 							tfBuffer(),
 							waitForTransform());
-					if(stereoTransform.isNull())
+					if(stereoTransform.isNull()) // tf获取失败
 					{
 						RCLCPP_ERROR(this->get_logger(), "Parameter %s is false but we cannot get TF between the two cameras! (between frames %s and %s)",
 								Parameters::kRtabmapImagesAlreadyRectified().c_str(),
@@ -569,7 +592,7 @@ void StereoOdometry::commonCallback(
 								leftCameraInfos[i].header.frame_id.c_str());
 						return;
 					}
-					else if(stereoTransform.isIdentity())
+					else if(stereoTransform.isIdentity()) // 如果是单位阵，输出错误信息
 					{
 						RCLCPP_ERROR(this->get_logger(), "Parameter %s is false but we cannot get a valid TF between the two cameras! "
 								"Identity transform returned between left and right cameras. Verify that if TF between "
@@ -582,8 +605,9 @@ void StereoOdometry::commonCallback(
 				}
 			}
 
+			// 创建相机模型并检查基线的有效性
 			rtabmap::StereoCameraModel stereoModel = rtabmap_conversions::stereoCameraModelFromROS(leftCameraInfos[i], rightCameraInfos[i], localTransform, stereoTransform);
-
+			// 基线为0 且图像已经矫正， 检查相机间的tf
 			if( stereoModel.baseline() == 0 &&
 				alreadyRectified &&
 				!rightCameraInfos[i].header.frame_id.empty() &&
@@ -618,14 +642,14 @@ void StereoOdometry::commonCallback(
 							stereoModel.left().imageSize());
 				}
 			}
-			if(alreadyRectified && stereoModel.baseline() <= 0)
+			if(alreadyRectified && stereoModel.baseline() <= 0) // 检查相机基线是否为正
 			{
 				RCLCPP_ERROR(this->get_logger(), "The stereo baseline (%f) should be positive (baseline=-Tx/fx). We assume a horizontal left/right stereo "
 						  "setup where the Tx (or P(0,3)) is negative in the right camera info msg.", stereoModel.baseline());
 				return;
 			}
 
-			if(stereoModel.baseline() > 10.0)
+			if(stereoModel.baseline() > 10.0) // 如果基线过大，发出警告
 			{
 				static bool shown = false;
 				if(!shown)
@@ -637,19 +661,21 @@ void StereoOdometry::commonCallback(
 					shown = true;
 				}
 			}
+			// 处理左图像的编码，如果不是单通道图像，则根据配置转换颜色
 			cv_bridge::CvImageConstPtr ptrLeft = leftImages[i];
 			if(leftImages[i]->encoding.compare(sensor_msgs::image_encodings::TYPE_8UC1) !=0 &&
 			   leftImages[i]->encoding.compare(sensor_msgs::image_encodings::MONO8) != 0)
 			{
 				if(keepColor_ && leftImages[i]->encoding.compare(sensor_msgs::image_encodings::MONO16) != 0)
 				{
-					ptrLeft = cv_bridge::cvtColor(leftImages[i], "bgr8");
+					ptrLeft = cv_bridge::cvtColor(leftImages[i], "bgr8"); // 转换为RGB8
 				}
 				else
 				{
-					ptrLeft = cv_bridge::cvtColor(leftImages[i], "mono8");
+					ptrLeft = cv_bridge::cvtColor(leftImages[i], "mono8"); // 转换为单通道灰度图
 				}
 			}
+			// 处理右图像
 			cv_bridge::CvImageConstPtr ptrRight = rightImages[i];
 			if(rightImages[i]->encoding.compare(sensor_msgs::image_encodings::TYPE_8UC1) !=0 &&
 			   rightImages[i]->encoding.compare(sensor_msgs::image_encodings::MONO8) != 0)
@@ -657,7 +683,7 @@ void StereoOdometry::commonCallback(
 				ptrRight = cv_bridge::cvtColor(rightImages[i], "mono8");
 			}
 
-			// initialize
+			// initialize 初始化左右图像的合并矩阵
 			if(left.empty())
 			{
 				left = cv::Mat(leftHeight, leftWidth*cameraCount, ptrLeft->image.type());
@@ -667,6 +693,7 @@ void StereoOdometry::commonCallback(
 				right = cv::Mat(rightHeight, rightWidth*cameraCount, ptrRight->image.type());
 			}
 
+			// 检查图像一致性，确保每个图像的类型匹配
 			if(ptrLeft->image.type() == left.type())
 			{
 				ptrLeft->image.copyTo(cv::Mat(left, cv::Rect(i*leftWidth, 0, leftWidth, leftHeight)));
@@ -687,7 +714,7 @@ void StereoOdometry::commonCallback(
 				return;
 			}
 
-			cameraModels.push_back(stereoModel);
+			cameraModels.push_back(stereoModel); // 更新模型数据
 		}
 		else
 		{
@@ -696,18 +723,19 @@ void StereoOdometry::commonCallback(
 		}
 	}
 
-	//
+	// 创建并填充传感器数据
 	rtabmap::SensorData data(
 			left,
 			right,
-			cameraModels,
+			cameraModels, // 有相机-imu 左右相机TF信息
 			0,
 			rtabmap_conversions::timestampFromROS(higherStamp));
-
+	
+	// 设置消息头部、时间戳、和坐标系id
 	std_msgs::msg::Header header;
 	header.stamp = higherStamp;
 	header.frame_id = leftImages.size()==1?leftImages[0]->header.frame_id:"";
-	this->processData(data, header);
+	this->processData(data, header); // 数据处理函数 data内有camera->imu 的TF
 }
 
 void StereoOdometry::callback(
@@ -716,19 +744,23 @@ void StereoOdometry::callback(
 		const sensor_msgs::msg::CameraInfo::ConstSharedPtr cameraInfoLeft,
 		const sensor_msgs::msg::CameraInfo::ConstSharedPtr cameraInfoRight)
 {
-	tick(imageRectLeft->header.stamp);
+	tick(imageRectLeft->header.stamp); // 获取图像时间戳
 
 	if(!this->isPaused())
 	{
+		// 创建存储左右相机和其信息的容器
 		std::vector<cv_bridge::CvImageConstPtr> leftMsgs(1);
 		std::vector<cv_bridge::CvImageConstPtr> rightMsgs(1);
 		std::vector<sensor_msgs::msg::CameraInfo> leftInfoMsgs;
 		std::vector<sensor_msgs::msg::CameraInfo> rightInfoMsgs;
+		// 将ros->opencv
 		leftMsgs[0] = cv_bridge::toCvShare(imageRectLeft);
 		rightMsgs[0] = cv_bridge::toCvShare(imageRectRight);
+		// 将相机信息存入容器
 		leftInfoMsgs.push_back(*cameraInfoLeft);
 		rightInfoMsgs.push_back(*cameraInfoRight);
 
+		// 如果图像时间戳差异过大给出警告
 		double stampDiff = fabs(rtabmap_conversions::timestampFromROS(imageRectLeft->header.stamp) - rtabmap_conversions::timestampFromROS(imageRectRight->header.stamp));
 		if(stampDiff > 0.010)
 		{

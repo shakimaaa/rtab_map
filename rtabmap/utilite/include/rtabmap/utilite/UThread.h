@@ -87,12 +87,12 @@ class UTILITE_EXPORT UThread : public UThreadC<void>
 {
 public:
     /**
-     * Enum of priorities : kPLow, kPBelowNormal, kPNormal, kPAboveNormal, kPRealTime.
+     * Enum of priorities : kPLow, kPBelowNormal, kPNormal, kPAboveNormal, kPRealTime. 线程优先级
      */
     enum Priority{kPLow, kPBelowNormal, kPNormal, kPAboveNormal, kPRealTime};
 
 public:
-    //return caller thread id
+    //return caller thread id 返回调用线程的id
     static unsigned long currentThreadId() {return (unsigned long)UThreadC<void>::Self();}
 
 public:

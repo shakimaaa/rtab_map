@@ -73,6 +73,14 @@
         "typeindex": "cpp",
         "typeinfo": "cpp",
         "variant": "cpp",
-        "semaphore": "cpp"
+        "semaphore": "cpp",
+        "*.ipp": "cpp",
+        "strstream": "cpp",
+        "codecvt": "cpp",
+        "coroutine": "cpp",
+        "source_location": "cpp",
+        "future": "cpp",
+        "valarray": "cpp",
+        "nonlinearoptimization": "cpp"
     }
 }

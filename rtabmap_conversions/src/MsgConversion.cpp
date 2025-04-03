@@ -809,19 +809,22 @@ void points3fToROS(const std::vector<cv::Point3f> & pts, std::vector<rtabmap_msg
 	}
 }
 
+// 立体视觉相机模型处理
 rtabmap::CameraModel cameraModelFromROS(
 		const sensor_msgs::msg::CameraInfo & camInfo,
 		const rtabmap::Transform & localTransform)
 {
-	cv:: Mat K;
+	cv:: Mat K; // 空的相机内参矩阵
+	// 断言相机内参必须为空或者3x3
 	UASSERT(camInfo.k.empty() || camInfo.k.size() == 9);
 	if(!camInfo.k.empty())
 	{
 		K = cv::Mat(3, 3, CV_64FC1);
-		memcpy(K.data, camInfo.k.data(), 9*sizeof(double));
+		memcpy(K.data, camInfo.k.data(), 9*sizeof(double)); // k不为空复制到opencv矩阵中
 	}
 
-	cv::Mat D;
+	cv::Mat D; // 创建一个空的相机畸变矩阵
+
 	if(camInfo.d.size())
 	{
 		if(camInfo.d.size()>=4 &&
@@ -829,13 +832,14 @@ rtabmap::CameraModel cameraModelFromROS(
 		    uStrContains(camInfo.distortion_model, "equidistant") ||
 		    uStrContains(camInfo.distortion_model, "Kannala Brandt4")))
 		{
+			// 畸变模型为鱼眼或者等距畸变
 			D = cv::Mat::zeros(1, 6, CV_64FC1);
 			D.at<double>(0,0) = camInfo.d[0];
 			D.at<double>(0,1) = camInfo.d[1];
 			D.at<double>(0,4) = camInfo.d[2];
 			D.at<double>(0,5) = camInfo.d[3];
 		}
-		else if(camInfo.d.size()>8)
+		else if(camInfo.d.size()>8) // 畸变系数数组大于8
 		{
 			bool zerosAfter8 = true;
 			for(size_t i=8; i<camInfo.d.size() && zerosAfter8; ++i)
@@ -861,15 +865,15 @@ rtabmap::CameraModel cameraModelFromROS(
 		}
 	}
 
-	cv:: Mat R;
-	UASSERT(camInfo.r.empty() || camInfo.r.size() == 9);
+	cv:: Mat R; // 创建旋转矩阵
+	UASSERT(camInfo.r.empty() || camInfo.r.size() == 9); // 断言R的大小为9或空
 	if(!camInfo.r.empty())
 	{
 		R = cv::Mat(3, 3, CV_64FC1);
 		memcpy(R.data, camInfo.r.data(), 9*sizeof(double));
 	}
 
-	cv:: Mat P;
+	cv:: Mat P; // 投影矩阵
 	UASSERT(camInfo.p.empty() || camInfo.p.size() == 12);
 	if(!camInfo.p.empty())
 	{
@@ -877,6 +881,7 @@ rtabmap::CameraModel cameraModelFromROS(
 		memcpy(P.data, camInfo.p.data(), 12*sizeof(double));
 	}
 
+	// 
 	return rtabmap::CameraModel(
 			"ros",
 			cv::Size(camInfo.width, camInfo.height),
@@ -2003,6 +2008,7 @@ rtabmap::Transform getTransform(
 	try
 	{
 		geometry_msgs::msg::TransformStamped tmp;
+		// 从lookupTransform 查找变换
 		tmp = tfBuffer.lookupTransform(fromFrameId, toFrameId,  tf2_ros::fromMsg(stamp), tf2::durationFromSec(waitForTransform));
 		transform = rtabmap_conversions::transformFromGeometryMsg(tmp.transform);
 	}
@@ -2011,7 +2017,7 @@ rtabmap::Transform getTransform(
 		UWARN("(getting transform %s -> %s) %s (wait_for_transform=%f)", fromFrameId.c_str(), toFrameId.c_str(), ex.what(), waitForTransform);
 	}
 
-	return transform;
+	return transform; // 返回获取的变换
 }
 
 // get moving transform accordingly to a fixed frame. For example get
