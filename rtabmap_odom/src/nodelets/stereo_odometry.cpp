@@ -393,6 +393,7 @@ void StereoOdometry::onOdomInit()
 	initDiagnosticMsg(subscribedTopicsMsg, approxSync, subscribedTopic);
 }
 
+// 确保 StereoOdometry 只在特定的配置下运行（即 "Reg/Strategy"=0）
 void StereoOdometry::updateParameters(ParametersMap & parameters)
 {
 	//make sure we are using Reg/Strategy=0
@@ -978,6 +979,7 @@ void StereoOdometry::callbackRGBD6(
 	}
 }
 
+// flushCallbacks() 主要用于清空和重新配置同步器，使得系统能够适应新的图像订阅器和同步策略。
 void StereoOdometry::flushCallbacks()
 {
 	//flush callbacks

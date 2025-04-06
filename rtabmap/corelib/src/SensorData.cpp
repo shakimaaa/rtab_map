@@ -311,12 +311,44 @@ void SensorData::setStereoImage(
 	models.push_back(stereoCameraModel);
 	setStereoImage(left, right, models, clearPreviousData);
 }
+
+/*
+left 和 right：分别表示输入的左图像和右图像。它们可以是原始图像或压缩图像。
+
+stereoCameraModels：立体相机模型的列表，用于存储和管理与图像相关的相机内参和畸变参数等信息。
+
+clearPreviousData：布尔值，指示是否清除之前的图像数据。true 表示清除，false 表示保留。
+
+_cameraModels：存储相机模型的内部成员变量。
+
+_stereoCameraModels：存储立体相机模型的内部成员变量，用于存储和使用传入的相机模型。
+
+_imageCompressed：压缩图像数据成员，存储压缩后的左图像。
+
+_imageRaw：原始图像数据成员，存储未压缩的左图像。
+
+_depthOrRightCompressed：压缩深度图像数据成员，存储压缩后的右图像或深度图像。
+
+_depthOrRightRaw：原始深度图像数据成员，存储未压缩的右图像或深度图像。
+
+如果 clearPreviousData 为 false，且 _cameraModels 已经包含图像数据，会发出警告，指示清除图像数据以避免数据冲突。
+
+根据 clearPreviousData 的值决定是否清空之前的图像数据。
+
+对输入的左图像和右图像进行处理，如果是压缩图像，将其存储在 _imageCompressed 和 _depthOrRightCompressed 中；如果是原始图像，存储在 _imageRaw 和 _depthOrRightRaw 中。
+
+如果图像为空并且要求清空数据，则将相应的图像数据设置为 cv::Mat()，即空矩阵。
+
+*/
+
+// 设置立体图像
 void SensorData::setStereoImage(
 		const cv::Mat & left,
 		const cv::Mat & right,
-		const std::vector<StereoCameraModel> & stereoCameraModels,
-		bool clearPreviousData)
+		const std::vector<StereoCameraModel> & stereoCameraModels, // 立体相机模型
+		bool clearPreviousData) // 是否清除之前的数据
 {
+	// 如果之前有图像数据，且 clearPreviousData 参数为 false，发出警告
 	if(!clearPreviousData && !_cameraModels.empty())
 	{
 		UERROR("Sensor data has previously RGB-D/RGB images "
@@ -324,18 +356,21 @@ void SensorData::setStereoImage(
 				"will still clear previous data to avoid incompatibilities "
 				"between raw and compressed data!");
 	}
+	// 根据参数决定是否清除之前的数据
 	bool clearData = clearPreviousData || !_cameraModels.empty();
 
+	// 清空之前的相机模型数据
 	_cameraModels.clear();
 	_stereoCameraModels = stereoCameraModels;
 
+	// 处理左图像
 	if(left.rows == 1)
 	{
-		UASSERT(left.type() == CV_8UC1); // Bytes
-		_imageCompressed = left;
+		UASSERT(left.type() == CV_8UC1); // Bytes  确保是单通道字节类型
+		_imageCompressed = left; // 存储压缩图像
 		if(clearData)
 		{
-			_imageRaw = cv::Mat();
+			_imageRaw = cv::Mat(); // 清空原始图像
 		}
 	}
 	else if(!left.empty())

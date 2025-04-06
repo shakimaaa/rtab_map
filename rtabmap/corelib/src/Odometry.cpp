@@ -55,10 +55,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace rtabmap {
 
+// 此方法根据传入的 parameters 创建一个里程计对象，并返回。它先解析并确定使用的里程计策略类型，然后调用另一个重载的 create 方法来创建具体的里程计类型对象。
 Odometry * Odometry::create(const ParametersMap & parameters)
-{
+{	
+	// 获取 odometry 类型的整数值，默认为默认的里程计策略
 	int odomTypeInt = Parameters::defaultOdomStrategy();
+	// 从参数中解析 odometry 类型，默认为 Parameters::kOdomStrategy()
 	Parameters::parse(parameters, Parameters::kOdomStrategy(), odomTypeInt);
+	// 将类型转换为枚举类型
 	Odometry::Type type = (Odometry::Type)odomTypeInt;
 	return create(type, parameters);
 }
@@ -67,6 +71,7 @@ Odometry * Odometry::create(Odometry::Type & type, const ParametersMap & paramet
 {
 	UDEBUG("type=%d", (int)type);
 	Odometry * odometry = 0;
+	 // 根据类型创建不同的里程计对象
 	switch(type)
 	{
 	case Odometry::kTypeF2M:
@@ -113,6 +118,7 @@ Odometry * Odometry::create(Odometry::Type & type, const ParametersMap & paramet
 		odometry = new OdometryOpen3D(parameters);
 		break;
 	default:
+	 	// 如果类型不明，打印错误信息并默认创建 OdometryF2M 类型的对象
 		UERROR("Unknown odometry type %d, using F2M instead...", (int)type);
 		odometry = new OdometryF2M(parameters);
 		type = Odometry::kTypeF2M;
@@ -297,6 +303,7 @@ Transform getMeanVelocity(const std::list<std::pair<std::vector<float>, double> 
 
 Transform Odometry::process(SensorData & data, OdometryInfo * info)
 {
+	// 调用带有空变换的处理方法，默认假设没有初始猜测变换
 	return process(data, Transform(), info);
 }
 
@@ -311,6 +318,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 	{
 		if(!(data.imu().orientation()[0] == 0.0 && data.imu().orientation()[1] == 0.0 && data.imu().orientation()[2] == 0.0))
 		{
+			// 创建IMU的局部变换，包括姿态（只包含滚转和俯仰，不包括偏航）
 			Transform orientation(0,0,0, data.imu().orientation()[0], data.imu().orientation()[1], data.imu().orientation()[2], data.imu().orientation()[3]);
 			// orientation includes roll and pitch but not yaw in local transform
 			// 计算imu的变换 将 IMU 数据从 原始传感器坐标系 转换到 目标坐标系
@@ -319,6 +327,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 					data.imu().localTransform().rotation().inverse();
 
 			// 初始化位姿
+			// 如果位姿的旋转矩阵是单位矩阵并且是第一次处理帧，更新初始位姿
 			if(	this->getPose().r11() == 1.0f && this->getPose().r22() == 1.0f && this->getPose().r33() == 1.0f &&
 				this->framesProcessed() == 0)
 			{
@@ -331,7 +340,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 
 			// 缓存IMU数据
 			imus_.insert(std::make_pair(data.stamp(), imuT));
-			if(imus_.size() > 1000)
+			if(imus_.size() > 1000) // 限制缓存大小，防止内存泄漏
 			{
 				imus_.erase(imus_.begin());
 			}
@@ -352,35 +361,42 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			data.stereoCameraModels().size());
 	}
 
-	// 矫正立体图像
+	// 如果图像没有矫正且不能处理原始图像，进行立体图像矫正
 	if(!_imagesAlreadyRectified && !this->canProcessRawImages() && !data.imageRaw().empty())
 	{
-		if(!data.stereoCameraModels().empty())
+		if(!data.stereoCameraModels().empty()) // 如果使用的是立体相机模型
 		{
 			bool valid = true;
-			if(data.stereoCameraModels().size() != stereoModels_.size())
+			if(data.stereoCameraModels().size() != stereoModels_.size()) // 检查模型是否一致
 			{
 				stereoModels_.clear();
 				valid = false;
 			}
 			else
 			{
+				// 遍历数据中的每个立体相机模型，检查其是否初始化了校正映射，并且当前立体模型的左图像尺寸是否与数据中的左图像尺寸匹配
 				for(size_t i=0; i<data.stereoCameraModels().size() && valid; ++i)
 				{
+					// 检查当前立体模型的校正映射是否已经初始化，并且左图像的尺寸是否与数据中的左图像尺寸匹配
 					valid = stereoModels_[i].isRectificationMapInitialized() &&
 							stereoModels_[i].left().imageSize() == data.stereoCameraModels()[i].left().imageSize();
 				}
 			}
 
+			// 如果模型无效，执行以下操作
 			if(!valid)
 			{
+				// 将数据中的立体相机模型复制到本地的stereoModels_中
 				stereoModels_ = data.stereoCameraModels();
 				valid = true;
+				// 初始化每个相机模型的校正映射，并检查是否成功初始化
 				for(size_t i=0; i<stereoModels_.size() && valid; ++i)
 				{
 					stereoModels_[i].initRectificationMap();
+					// 检查校正映射是否初始化成功
 					valid = stereoModels_[i].isRectificationMapInitialized();
 				}
+				// 如果所有模型的校正映射都成功初始化
 				if(valid)
 				{
 					UWARN("%s parameter is set to false but the selected odometry approach cannot "
@@ -394,11 +410,13 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 							"Make sure images are rectified and set %s parameter back to true, or "
 							"make sure calibration is valid for rectification",
 							Parameters::kRtabmapImagesAlreadyRectified().c_str());
+					// 清空立体相机模型列表
 					stereoModels_.clear();
 				}
 			}
 			if(valid)
 			{
+				// 如果只有一个立体相机模型
 				if(stereoModels_.size()==1)
 				{
 					data.setStereoImage(
@@ -409,14 +427,20 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 				}
 				else
 				{
+					// 校正多个相机模型的图像
 					UASSERT(int((data.imageRaw().cols/data.stereoCameraModels().size())*data.stereoCameraModels().size()) == data.imageRaw().cols);
+					 // 计算每个子图像的宽度
 					int subImageWidth = data.imageRaw().cols/data.stereoCameraModels().size();
+					// 克隆原始图像，用于存储校正后的图像
 					cv::Mat rectifiedLeftImages = data.imageRaw().clone();
 					cv::Mat rectifiedRightImages = data.imageRaw().clone();
+					// 对每个立体相机模型进行图像校正
 					for(size_t i=0; i<stereoModels_.size() && valid; ++i)
 					{
+						// 对左图像和右图像分别进行校正
 						cv::Mat rectifiedLeft = stereoModels_[i].left().rectifyImage(cv::Mat(data.imageRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows)));
 						cv::Mat rectifiedRight = stereoModels_[i].right().rectifyImage(cv::Mat(data.rightRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, data.rightRaw().rows)));
+						// 将校正后的图像复制到最终的图像矩阵中
 						rectifiedLeft.copyTo(cv::Mat(rectifiedLeftImages, cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows)));
 						rectifiedRight.copyTo(cv::Mat(rectifiedRightImages, cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows)));
 					}
@@ -424,9 +448,11 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 				}
 			}
 		}
+		// 如果没有立体相机模型，则跳过
 		else if(!data.cameraModels().empty())
 		{
 			bool valid = true;
+			// 如果相机模型的数量与当前存储的模型数量不相同，清空现有模型
 			if(data.cameraModels().size() != models_.size())
 			{
 				models_.clear();
@@ -434,6 +460,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			}
 			else
 			{
+				// 校验每个相机模型的校正映射是否已初始化，并且图像尺寸是否一致
 				for(size_t i=0; i<data.cameraModels().size() && valid; ++i)
 				{
 					valid = models_[i].isRectificationMapInitialized() &&
@@ -441,22 +468,24 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 				}
 			}
 
+			// 如果校验失败，则尝试初始化新的模型并进行图像校正
 			if(!valid)
 			{
 				models_ = data.cameraModels();
 				valid = true;
+				// 初始化新的相机模型的校正映射
 				for(size_t i=0; i<models_.size() && valid; ++i)
 				{
 					valid = models_[i].initRectificationMap();
 				}
-				if(valid)
+				if(valid) // 如果校正映射初始化成功，显示警告并继续处理
 				{
 					UWARN("%s parameter is set to false but the selected odometry approach cannot "
 							"process raw images. We will rectify them for convenience (only "
 							"rgb is rectified, we assume depth image is already rectified!).",
 							Parameters::kRtabmapImagesAlreadyRectified().c_str());
 				}
-				else
+				else // 如果校正映射初始化失败，显示错误并清空模型
 				{
 					UERROR("Odometry approach chosen cannot process raw images (not rectified images) "
 							"and we cannot rectify them as the rectification map failed to initialize (valid calibration?). "
@@ -466,22 +495,27 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 					models_.clear();
 				}
 			}
+			// 如果校正成功，进行图像的处理和设置
 			if(valid)
 			{
 				// Note that only RGB image is rectified, the depth image is assumed to be already registered to rectified RGB camera.
+				// 只有RGB图像被校正，深度图像假设已经与校正的RGB相机对齐
 				if(models_.size()==1)
 				{
+					// 对单个模型进行图像校正
 					data.setRGBDImage(models_[0].rectifyImage(data.imageRaw()), data.depthRaw(), models_, false);
 				}
 				else
 				{
+					// 校正多个模型的图像
 					UASSERT(int((data.imageRaw().cols/data.cameraModels().size())*data.cameraModels().size()) == data.imageRaw().cols);
-					int subImageWidth = data.imageRaw().cols/data.cameraModels().size();
-					cv::Mat rectifiedImages = data.imageRaw().clone();
+					int subImageWidth = data.imageRaw().cols/data.cameraModels().size(); // 每个图像子部分的宽度
+					cv::Mat rectifiedImages = data.imageRaw().clone(); // 克隆原始图像
 					for(size_t i=0; i<models_.size() && valid; ++i)
 					{
+						// 对每个子图像进行校正
 						cv::Mat rectifiedImage = models_[i].rectifyImage(cv::Mat(data.imageRaw(), cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows)));
-						rectifiedImage.copyTo(cv::Mat(rectifiedImages, cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows)));
+						rectifiedImage.copyTo(cv::Mat(rectifiedImages, cv::Rect(subImageWidth*i, 0, subImageWidth, data.imageRaw().rows))); // 将校正后的图像拷贝到完整的校正图像矩阵中
 					}
 					data.setRGBDImage(rectifiedImages, data.depthRaw(), models_, false);
 				}
@@ -497,33 +531,43 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 	}
 
 	// Ground alignment
+	// 如果位姿为初始状态（0, 0, 0），且尚未处理任何帧，并且启用了与地面对齐的选项
 	if(_pose.x() == 0 && _pose.y() == 0 && _pose.z() == 0 && this->framesProcessed() == 0 && _alignWithGround)
 	{
+		// 如果深度信息为空，则跳过地面对齐过程
 		if(data.depthOrRightRaw().empty())
 		{
 			UWARN("\"%s\" is true but the input has no depth information, ignoring alignment with ground...", Parameters::kOdomAlignWithGround().c_str());
 		}
 		else
 		{
+			// 创建一个定时器，用于计算对齐过程的时间
 			UTimer alignTimer;
-			pcl::IndicesPtr indices(new std::vector<int>);
-			pcl::IndicesPtr ground, obstacles;
-			pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::cloudFromSensorData(data, 1, 10, 0, indices.get());
-			bool success = false;
+			pcl::IndicesPtr indices(new std::vector<int>); // 用于存储点云的索引
+			pcl::IndicesPtr ground, obstacles; // 用于存储分割出的地面和障碍物点云
+			pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = util3d::cloudFromSensorData(data, 1, 10, 0, indices.get()); // 从传感器数据创建点云
+			bool success = false; // 用于标识地面对齐是否成功
+			// 如果点云数据非空，进行点云处理
 			if(indices->size())
 			{
+				// 对点云进行体素化（降低点云分辨率，减少计算量）
 				cloud = util3d::voxelize(cloud, indices, 0.01);
+				// 如果已有位姿，则将点云变换到当前位姿下
 				if(!_pose.isIdentity())
 				{
 					// In case we are already aligned with gravity
 					cloud = util3d::transformPointCloud(cloud, _pose);
 				}
+				// 分割点云中的地面和障碍物
 				util3d::segmentObstaclesFromGround<pcl::PointXYZ>(cloud, ground, obstacles, 20, M_PI/4.0f, 0.02, 200, true);
+				// 如果分割出了地面点云
 				if(ground->size())
 				{
+					 // 提取地面平面模型的系数
 					pcl::ModelCoefficients coefficients;
 					util3d::extractPlane(cloud, ground, 0.02, 100, &coefficients);
-					if(coefficients.values.at(3) >= 0)
+					// 根据平面系数判断地面或天花板
+					if(coefficients.values.at(3) >= 0) // 如果检测到地面，输出警告信息
 					{
 						UWARN("Ground detected! coefficients=(%f, %f, %f, %f) time=%fs",
 								coefficients.values.at(0),
@@ -532,7 +576,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 								coefficients.values.at(3),
 								alignTimer.ticks());
 					}
-					else
+					else // 如果检测到天花板，输出警告信息
 					{
 						UWARN("Ceiling detected! coefficients=(%f, %f, %f, %f) time=%fs",
 								coefficients.values.at(0),
@@ -541,22 +585,27 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 								coefficients.values.at(3),
 								alignTimer.ticks());
 					}
+					// 获取平面法向量（地面或天花板）
 					Eigen::Vector3f n(coefficients.values.at(0), coefficients.values.at(1), coefficients.values.at(2));
-					Eigen::Vector3f z(0,0,1);
+					Eigen::Vector3f z(0,0,1); // z轴单位向量
 					//get rotation from z to n;
+					// 获取从z轴到n向量的旋转矩阵
 					Eigen::Matrix3f R;
 					R = Eigen::Quaternionf().setFromTwoVectors(n,z);
+					// 如果位姿是初始状态（单位矩阵），则进行地面对齐
 					if(_pose.r11() == 1.0f && _pose.r22() == 1.0f && _pose.r33() == 1.0f)
 					{
+						// 创建地面对齐后的变换
 						Transform rotation(
 								R(0,0), R(0,1), R(0,2), 0,
 								R(1,0), R(1,1), R(1,2), 0,
 								R(2,0), R(2,1), R(2,2), coefficients.values.at(3));
-						this->reset(rotation);
+						this->reset(rotation); // 重置位姿
 					}
 					else
 					{
 						// Rotation is already set (e.g., from IMU/gravity), just update Z
+						// 如果位姿已经初始化（如通过IMU），则仅更新z坐标
 						UWARN("Rotation was already initialized, just offseting z to %f", coefficients.values.at(3));
 						Transform pose = _pose;
 						pose.z() = coefficients.values.at(3);
@@ -576,19 +625,27 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 	}
 
 	// KITTI datasets start with stamp=0
+	// 计算时间间隔dt
+	// 如果previousStamp_大于0.0，则时间间隔为当前时间戳与上一帧时间戳的差值
+	// 如果previousStamp_为0.0且已处理了第一帧，则认为时间间隔为0
+	// 否则，时间间隔dt为0
 	double dt = previousStamp_>0.0f || (previousStamp_==0.0f && framesProcessed()==1)?data.stamp() - previousStamp_:0.0;
+	// 根据时间间隔和猜测是否来自运动的条件来决定是否设置初始猜测（默认为单位变换）
 	Transform guess = dt>0.0 && guessFromMotion_ && !velocityGuess_.isNull()?Transform::getIdentity():Transform();
+	// 如果时间间隔无效，且不是从运动中进行猜测的情况
 	if(!(dt>0.0 || (dt == 0.0 && velocityGuess_.isNull())))
 	{
+		// 如果启用了从运动中进行猜测，但当前时间间隔无效，输出错误信息
 		if(guessFromMotion_ && (!data.imageRaw().empty() || !data.laserScanRaw().isEmpty()))
 		{
 			UERROR("Guess from motion is set but dt is invalid! Odometry is then computed without guess. (dt=%f previous transform=%s)", dt, velocityGuess_.prettyPrint().c_str());
 		}
+		// 如果启用了卡尔曼滤波，但时间间隔无效，输出错误信息
 		else if(_filteringStrategy==1)
 		{
 			UERROR("Kalman filtering is enabled but dt is invalid! Odometry is then computed without Kalman filtering. (dt=%f previous transform=%s)", dt, velocityGuess_.prettyPrint().c_str());
 		}
-		dt=0;
+		dt=0;  // 设置时间间隔为0，并清除以前的速度数据
 		previousVelocities_.clear();
 		velocityGuess_.setNull();
 	}

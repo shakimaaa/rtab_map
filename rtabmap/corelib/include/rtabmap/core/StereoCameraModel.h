@@ -100,7 +100,8 @@ public:
 	std::vector<unsigned char> serialize() const;
 	unsigned int deserialize(const std::vector<unsigned char>& data);
 	unsigned int deserialize(const unsigned char * data, unsigned int dataSize);
-
+	
+	// 判断左右相机的焦距是否不为零 如果焦距不为零，计算基线 否则，返回零表示无法计算基线否则，返回零表示无法计算基线
 	double baseline() const {return right_.fx()!=0.0 && left_.fx() != 0.0 ? left_.Tx() / left_.fx() - right_.Tx()/right_.fx():0.0;}
 
 	float computeDepth(float disparity) const;

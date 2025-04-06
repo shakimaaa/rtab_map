@@ -61,50 +61,54 @@ using namespace rtabmap;
 
 namespace rtabmap_odom {
 
+// 默认构造函数，调用另一个构造函数并传递 "odometry" 节点名称和配置选项
 OdometryROS::OdometryROS(const rclcpp::NodeOptions & options) :
 		OdometryROS("odometry", options)
 	{}
-
+// 构造函数主体
 OdometryROS::OdometryROS(const std::string & name, const rclcpp::NodeOptions & options) :
 	Node(name, options),
-	odometry_(0),
-	frameId_("base_link"),
-	odomFrameId_("odom"),
-	groundTruthFrameId_(""),
-	groundTruthBaseFrameId_(""),
-	guessFrameId_(""),
-	guessMinTranslation_(0.0),
-	guessMinRotation_(0.0),
-	guessMinTime_(0.0),
-	publishTf_(true),
+	odometry_(0), // 里程计对象的初始化
+	frameId_("base_link"), // 默认帧ID
+	odomFrameId_("odom"),  // 里程计坐标系ID  // 里程计坐标系ID
+	groundTruthFrameId_(""),  // 地面真值坐标系ID
+	groundTruthBaseFrameId_(""),  // 默认地面真值的基坐标系为空
+	guessFrameId_(""),// 初始猜测坐标系为空
+	guessMinTranslation_(0.0),  // 初始猜测的最小平移设为0
+	guessMinRotation_(0.0),// 初始猜测的最小旋转设为0
+	guessMinTime_(0.0),  // 初始猜测的最小时间设为0
+	publishTf_(true),  // 默认启用TF广播
 	waitForTransform_(0.1), // 100 ms
-	publishNullWhenLost_(true),
-	publishCompressedSensorData_(false),
-	qos_(RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT),
-	paused_(false),
-	resetCountdown_(0),
-	resetCurrentCount_(0),
-	previousStamp_(0.0),
-	expectedUpdateRate_(0.0),
-	maxUpdateRate_(0.0),
-	minUpdateRate_(0.0),
-	compressionImgFormat_(".jpg"),
-	compressionParallelized_(true),
-	odomStrategy_(Parameters::defaultOdomStrategy()),
-	waitIMUToinit_(false),
-	alwaysCheckImuTf_(true),
-	imuProcessed_(false),
-	processedMsgs_(0),
-	droppedMsgs_(0),
-	configPath_(),
-	initialPose_(Transform::getIdentity()),
-	ulogToRosout_(this)
+	publishNullWhenLost_(true),  // 当丢失里程计数据时，发布null
+	publishCompressedSensorData_(false),  // 默认不发布压缩的传感器数据
+	qos_(RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT),  // 默认的服务质量设置为系统默认
+	paused_(false),  // 默认节点不暂停
+	resetCountdown_(0),  // 重置倒计时初始化为0
+	resetCurrentCount_(0),  // 当前重置计数初始化为0
+	previousStamp_(0.0),  // 上一时间戳初始化为0
+	expectedUpdateRate_(0.0),  // 预期更新率初始化为0
+	maxUpdateRate_(0.0),  // 最大更新率初始化为0
+	minUpdateRate_(0.0),  // 最小更新率初始化为0
+	compressionImgFormat_(".jpg"),  // 图像压缩格式初始化为JPEG
+	compressionParallelized_(true),  // 启用图像压缩并行化
+	odomStrategy_(Parameters::defaultOdomStrategy()),  // 里程计策略初始化为默认策略
+	waitIMUToinit_(false),  // 默认不等待IMU初始化
+	alwaysCheckImuTf_(true),  // 默认始终检查IMU变换
+	imuProcessed_(false),  // IMU数据处理状态初始化为false
+	processedMsgs_(0),  // 处理的消息数初始化为0
+	droppedMsgs_(0),  // 丢弃的消息数初始化为0
+	configPath_(),  // 配置路径初始化为空
+	initialPose_(Transform::getIdentity()),  // 初始位姿初始化为单位矩阵
+	ulogToRosout_(this)  // 日志设置为ROS输出
 {
+	// 创建一个互斥回调组
 	dataCallbackGroup_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
+	// 从ROS参数服务器声明"qos"参数并初始化
 	int qos = this->declare_parameter("qos", (int)qos_);
-	qos_ = (rmw_qos_reliability_policy_t)qos;
+	qos_ = (rmw_qos_reliability_policy_t)qos; // 设置可靠性策略
 
+	// 初始化发布者，用于发布里程计和相关信息
 	odomPub_ = create_publisher<nav_msgs::msg::Odometry>("odom", rclcpp::QoS(1).reliability(qos_));
 	odomInfoPub_ = create_publisher<rtabmap_msgs::msg::OdomInfo>("odom_info", rclcpp::QoS(1).reliability(qos_));
 	odomInfoLitePub_ = create_publisher<rtabmap_msgs::msg::OdomInfo>("odom_info_lite", rclcpp::QoS(1).reliability(qos_));
@@ -116,10 +120,12 @@ OdometryROS::OdometryROS(const std::string & name, const rclcpp::NodeOptions & o
 	odomSensorDataFeaturesPub_ = create_publisher<rtabmap_msgs::msg::SensorData>("odom_sensor_data/features", rclcpp::QoS(1).reliability(qos_));
 	odomSensorDataCompressedPub_ = create_publisher<rtabmap_msgs::msg::SensorData>("odom_sensor_data/compressed", rclcpp::QoS(1).reliability(qos_));
 
+	// 初始化TF相关功能
 	tfBuffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
 	tfListener_ = std::make_shared<tf2_ros::TransformListener>(*tfBuffer_);
 	tfBroadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
+	// 参数设置
 	std::string initialPoseStr;
 	frameId_ = this->declare_parameter("frame_id", frameId_);
 	odomFrameId_ = this->declare_parameter("odom_frame_id", odomFrameId_);
@@ -147,21 +153,24 @@ OdometryROS::OdometryROS(const std::string & name, const rclcpp::NodeOptions & o
 	waitIMUToinit_ = this->declare_parameter("wait_imu_to_init", waitIMUToinit_);
 	alwaysCheckImuTf_ = this->declare_parameter("always_check_imu_tf", alwaysCheckImuTf_);
 	
-
+	// 处理路径中的 ~ 符号，替换为用户主目录
 	configPath_ = uReplaceChar(configPath_, '~', UDirectory::homeDir());
 	if(configPath_.size() && configPath_.at(0) != '/')
-	{
+	{	
+		// 如果路径没有以 / 开头，则将当前目录作为前缀
 		configPath_ = UDirectory::currentDir(true) + configPath_;
 	}
 
+	// 解析初始位姿
 	if(initialPoseStr.size())
 	{
 		std::vector<std::string> values = uListToVector(uSplit(initialPoseStr, ' '));
 		if(values.size() == 6)
-		{
+		{	
+			// 将位姿字符串转化为 Transform 对象
 			initialPose_ = Transform(
-					uStr2Float(values[0]), uStr2Float(values[1]), uStr2Float(values[2]),
-					uStr2Float(values[3]), uStr2Float(values[4]), uStr2Float(values[5]));
+					uStr2Float(values[0]), uStr2Float(values[1]), uStr2Float(values[2]), // X Y Z
+					uStr2Float(values[3]), uStr2Float(values[4]), uStr2Float(values[5])); // R P Y
 		}
 		else
 		{
@@ -170,11 +179,13 @@ OdometryROS::OdometryROS(const std::string & name, const rclcpp::NodeOptions & o
 		}
 	}
 
+	// 日志设置
 	int eventLevel = ULogger::kFatal;
 	eventLevel = this->declare_parameter("log_to_rosout_level", eventLevel);
 	UASSERT(eventLevel >= ULogger::kDebug && eventLevel <= ULogger::kFatal);
-	ULogger::setEventLevel((ULogger::Level)eventLevel);
+	ULogger::setEventLevel((ULogger::Level)eventLevel); // 设置日志级别
 
+	// 检查冲突参数
 	if(publishTf_ && !guessFrameId_.empty() && guessFrameId_.compare(odomFrameId_) == 0)
 	{
 		RCLCPP_WARN(this->get_logger(), "\"publish_tf\" and \"guess_frame_id\" cannot be used "
@@ -208,6 +219,7 @@ OdometryROS::OdometryROS(const std::string & name, const rclcpp::NodeOptions & o
 
 OdometryROS::~OdometryROS()
 {
+	// 调用基类的join方法，确保在销毁对象时，所有的线程都能够正确地结束
 	this->join(true);
 	delete odometry_;
 }
@@ -322,23 +334,29 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams) // 立
 		iter!=Parameters::getRemovedParameters().end();
 		++iter)
 	{
-		rclcpp::Parameter parameter;
+		rclcpp::Parameter parameter; // 创建一个新的参数对象
+		// 如果当前参数仍然在参数列表中
 		if(get_parameter(iter->first, parameter))
 		{
 			std::string vStr = parameter.as_string();
+			 // 如果移除的参数有新的替代参数，并且替代参数已经存在于当前参数中
 			if(!iter->second.second.empty() && parameters_.find(iter->second.second)!=parameters_.end())
 			{
+				// 输出警告，说明参数名已经改变，且新参数的值已经存在
 				RCLCPP_WARN(this->get_logger(), "Odometry: Parameter name changed: \"%s\" -> \"%s\". The new parameter is already used with value \"%s\", ignoring the old one with value \"%s\".",
 						iter->first.c_str(), iter->second.second.c_str(), parameters_.find(iter->second.second)->second.c_str(), vStr.c_str());
 			}
+			// 如果该移除的参数允许迁移到新的参数名
 			else if(iter->second.first && parameters_.find(iter->second.second) != parameters_.end())
 			{
 				// can be migrated
+				// 可以迁移，更新参数为新名称
 				parameters_.at(iter->second.second)= vStr;
 				RCLCPP_WARN(this->get_logger(), "Odometry: Parameter name changed: \"%s\" -> \"%s\". Please update your launch file accordingly. Value \"%s\" is still set to the new parameter name.",
 						iter->first.c_str(), iter->second.second.c_str(), vStr.c_str());
 			}
 			else
+			// 如果新的替代参数名为空或不存在，输出错误
 			{
 				if(iter->second.second.empty())
 				{
@@ -354,9 +372,12 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams) // 立
 		}
 	}
 
+	// 解析参数，并将解析结果存储在 `resetCountdown_` 变量中
 	Parameters::parse(parameters_, Parameters::kOdomResetCountdown(), resetCountdown_);
+	// 将参数 "kOdomResetCountdown" 设置为 "0"，即修改 `resetCountdown_` 参数
 	parameters_.at(Parameters::kOdomResetCountdown()) = "0"; // use modified reset countdown here
 
+	// 更新整个参数列表，将修改后的参数应用到系统中
 	this->updateParameters(parameters_);
 
 	// 创建并重建里程计对象
@@ -383,9 +404,9 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams) // 立
 	// imu接入
 	if(waitIMUToinit_)
 	{
-		imuCallbackGroup_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+		imuCallbackGroup_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive); 
 		rclcpp::SubscriptionOptions options;
-		options.callback_group = imuCallbackGroup_;
+		options.callback_group = imuCallbackGroup_; // 将IMU订阅加入到回调组中
 		int queueSize = this->declare_parameter("imu_queue_size", 200); // imu队列大小
 		int qosImu = this->declare_parameter("qos_imu", (int)qos_); // qos级别
 		// 订阅imu话题绑定回调函数
@@ -395,7 +416,7 @@ void OdometryROS::init(bool stereoParams, bool visParams, bool icpParams) // 立
 		RCLCPP_INFO(this->get_logger(), "odometry: imu_queue_size = %d", queueSize);
 	}
 
-	this->start(); // 启动里程计
+	this->start(); // 启动里程计线程
 
 	onOdomInit(); // 执行里程计初始化后的操作
 }
@@ -541,6 +562,7 @@ void OdometryROS::mainLoop()
 		{
 			RCLCPP_WARN(this->get_logger(), "Make sure IMU is published faster than data rate! (last image stamp=%f and last imu stamp received=%f). Buffering the image until an imu with same or greater stamp is received.",
 					data.stamp(), imus_.empty()?0:imus_.rbegin()->first);
+			// 标记图像数据需要缓存
 			bufferedDataToProcess_ = true;
 			return;
 		}
@@ -554,15 +576,17 @@ void OdometryROS::mainLoop()
 		for(std::map<double, sensor_msgs::msg::Imu::ConstSharedPtr>::iterator iter=imus_.begin(); iter!=iterEnd;)
 		{
 			imus.push_back(*iter);
-			imus_.erase(iter++);
+			imus_.erase(iter++); // 从imus_中删除当前元素，并移动到下一个元素
 		}
 	} // end imu lock
 
-	bool imuWarnShown = false;
+	bool imuWarnShown = false; // 控制是否显示IMU变换的警告信息
 	for(size_t i=0; i<imus.size(); ++i)
 	{
+		// 如果设置了 alwaysCheckImuTf_ 并且没有显示过警告，或者 imuLocalTransform_ 是空的（即当前IMU数据的局部变换没有被初始化），则进入处理逻辑
 		if((alwaysCheckImuTf_ && !imuWarnShown) || imuLocalTransform_.isNull())
 		{
+			// 如果IMU数据的帧ID与当前帧ID不同（即IMU数据的坐标系与当前坐标系不一致），则需要对IMU数据进行变换
 			if(this->frameId().compare(imus[i].second->header.frame_id) != 0)
 			{
 				// We should not have to wait for IMU TF (imu delay <<< sensor data delay), so don't
@@ -590,6 +614,7 @@ void OdometryROS::mainLoop()
 			}
 		}
 		
+		// 创建一个 IMU 对象，将IMU的各种数据（如姿态、角速度、线加速度及其协方差矩阵）存储到该对象中，同时将变换 imuLocalTransform_ 传递给它
 		IMU imu(cv::Vec4d(imus[i].second->orientation.x, imus[i].second->orientation.y, imus[i].second->orientation.z, imus[i].second->orientation.w),
 				cv::Mat(3,3,CV_64FC1,(void*)imus[i].second->orientation_covariance.data()).clone(),
 				cv::Vec3d(imus[i].second->angular_velocity.x, imus[i].second->angular_velocity.y, imus[i].second->angular_velocity.z),
@@ -598,7 +623,7 @@ void OdometryROS::mainLoop()
 				cv::Mat(3,3,CV_64FC1,(void*)imus[i].second->linear_acceleration_covariance.data()).clone(),
 				imuLocalTransform_);
 
-		SensorData dataIMU(imu, 0, imus[i].first);
+		SensorData dataIMU(imu, 0, imus[i].first); // 将IMU数据封装为一个 SensorData 对象，其中 imus[i].first 是时间戳
 		odometry_->process(dataIMU);
 		imuProcessed_ = true;
 	}
@@ -1189,22 +1214,24 @@ void OdometryROS::resetToPose(
 	reset(pose);
 }
 
+// 用于重置 OdometryROS 对象的状态和数据，通常用于在发生一些不一致或错误的情况下重新初始化 odometry（里程计）系统。
 void OdometryROS::reset(const Transform & pose)
 {
 	UScopeMutex lock(dataMutex_);
 	odometry_->reset(pose);
+	// guess_ 和 guessPreviousPose_ 被设置为空（setNull()）。这意味着之前的估计和猜测的位姿被丢弃。guess_ 和 guessPreviousPose_ 被设置为空（setNull()）。这意味着之前的估计和猜测的位姿被丢弃。
 	guess_.setNull();
 	guessPreviousPose_.setNull();
-	previousStamp_ = 0.0;
+	previousStamp_ = 0.0; // 设置为 0.0，即不再使用之前的时间戳。
 	resetCurrentCount_ = resetCountdown_;
-	imuProcessed_ = false;
+	imuProcessed_ = false; // 表示 IMU 数据尚未处理。
 	dataToProcess_ = SensorData();
-	dataHeaderToProcess_ = std_msgs::msg::Header();
-	bufferedDataToProcess_ = false;
+	dataHeaderToProcess_ = std_msgs::msg::Header(); // 表示没有待处理的数据
+	bufferedDataToProcess_ = false; // 表示没有缓冲数据
 	imuMutex_.lock();
 	imus_.clear();
 	imuMutex_.unlock();
-	imuLocalTransform_.setNull();
+	imuLocalTransform_.setNull(); // 表示重置了本地 IMU 变换
 	this->flushCallbacks();
 }
 
