@@ -69,9 +69,25 @@ Transform::Transform(const cv::Mat & transformationMatrix)
 	}
 }
 
+/**
+ * 构造函数：通过给定的平移和欧拉角创建变换矩阵
+ * 
+ * @param x     沿x轴的平移量（单位：米）
+ * @param y     沿y轴的平移量（单位：米）
+ * @param z     沿z轴的平移量（单位：米）
+ * @param roll  绕x轴的旋转角度（单位：弧度）
+ * @param pitch 绕y轴的旋转角度（单位：弧度）
+ * @param yaw   绕z轴的旋转角度（单位：弧度）
+ * 
+ * 功能：创建一个4x4的齐次变换矩阵，包含指定的平移和旋转
+ */
 Transform::Transform(float x, float y, float z, float roll, float pitch, float yaw)
 {
+	// 使用PCL库的getTransformation函数创建Eigen::Affine3f变换矩阵
+    // 该函数将欧拉角转换为旋转矩阵，并与平移向量组合成4x4齐次变换矩阵
 	Eigen::Affine3f t = pcl::getTransformation (x, y, z, roll, pitch, yaw);
+	// 将Eigen::Affine3f类型的变换矩阵转换为自定义的Transform类型
+    // fromEigen3f是自定义的转换函数，*this表示当前对象
 	*this = fromEigen3f(t);
 }
 
@@ -207,16 +223,26 @@ Transform Transform::translation() const
 					 0,0,1, data()[11]);
 }
 
+/**
+ * 将6自由度变换转换为3自由度变换（2D平面运动）
+ * @return 返回只包含x,y平移和yaw旋转的变换矩阵
+ * 
+ * 说明：3自由度变换矩阵形式：
+ * [ cos(yaw)  -sin(yaw)   0   x ]
+ * [ sin(yaw)   cos(yaw)   0   y ]
+ * [    0          0       1   0 ]
+ */
 Transform Transform::to3DoF() const
 {
+	// 声明变量存储原始变换的平移和欧拉角
 	float x,y,z,roll,pitch,yaw;
-	this->getTranslationAndEulerAngles(x,y,z,roll,pitch,yaw);
+	this->getTranslationAndEulerAngles(x,y,z,roll,pitch,yaw); //将4x4齐次变换矩阵分解为平移分量和欧拉角表示
 	float A = std::cos(yaw);
 	float B = std::sin(yaw);
 	return Transform(
-			A,-B, 0, x,
-			B, A, 0, y,
-			0, 0, 1, 0);
+			A,-B, 0, x, // 第一行：旋转部分(cos,-sin,0) + x平移
+			B, A, 0, y, // 第二行：旋转部分(sin,cos,0) + y平移
+			0, 0, 1, 0); // 第三行：固定z轴(0,0,1) + z=0
 }
 
 Transform Transform::to4DoF() const
@@ -255,8 +281,23 @@ cv::Mat Transform::translationMatrix() const
 	return data_.col(3).clone();
 }
 
+/**
+ * 从变换矩阵中提取平移和欧拉角表示
+ * 
+ * @param[out] x     沿x轴的平移量（单位：米）
+ * @param[out] y     沿y轴的平移量（单位：米）
+ * @param[out] z     沿z轴的平移量（单位：米）
+ * @param[out] roll  绕x轴的旋转角度（横滚角，单位：弧度）
+ * @param[out] pitch 绕y轴的旋转角度（俯仰角，单位：弧度）
+ * @param[out] yaw   绕z轴的旋转角度（偏航角，单位：弧度）
+ * 
+ * 功能：将4x4齐次变换矩阵分解为平移分量和欧拉角表示
+ * 实现：调用PCL库的getTranslationAndEulerAngles函数完成实际计算
+ */
 void Transform::getTranslationAndEulerAngles(float & x, float & y, float & z, float & roll, float & pitch, float & yaw) const
 {
+	// 调用PCL库函数进行矩阵分解
+    // toEigen3f()将当前变换转换为Eigen::Affine3f格式
 	pcl::getTranslationAndEulerAngles(toEigen3f(), x, y, z, roll, pitch, yaw);
 }
 

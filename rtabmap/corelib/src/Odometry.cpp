@@ -649,10 +649,13 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 		previousVelocities_.clear();
 		velocityGuess_.setNull();
 	}
+	// 检查速度猜测值velocityGuess_是否非空（非零变换）
 	if(!velocityGuess_.isNull())
 	{
+		// 如果启用了从运动中进行猜测（guessFromMotion_为true）
 		if(guessFromMotion_)
 		{
+			// 使用滤波策略1（卡尔曼滤波）
 			if(_filteringStrategy == 1)
 			{
 				// use Kalman predict transform
@@ -660,11 +663,12 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 				predictKalmanFilter(dt, &vx,&vy,&vz,&vroll,&vpitch,&vyaw);
 				guess = Transform(vx*dt, vy*dt, vz*dt, vroll*dt, vpitch*dt, vyaw*dt);
 			}
-			else
+			else // 不使用卡尔曼滤波时，直接从velocityGuess_获取速度
 			{
 				float vx,vy,vz, vroll,vpitch,vyaw;
+				// 从当前速度猜测值获取线速度和欧拉角速度
 				velocityGuess_.getTranslationAndEulerAngles(vx,vy,vz, vroll,vpitch,vyaw);
-				guess = Transform(vx*dt, vy*dt, vz*dt, vroll*dt, vpitch*dt, vyaw*dt);
+				guess = Transform(vx*dt, vy*dt, vz*dt, vroll*dt, vpitch*dt, vyaw*dt); // 计算位移和旋转变化量，构造变换矩阵
 			}
 		}
 		else if(_filteringStrategy == 1)
@@ -673,25 +677,34 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 		}
 	}
 
-	Transform imuCurrentTransform;
+	Transform imuCurrentTransform;  // 声明当前IMU变换变量
+	// 检查是否提供了初始猜测变换
 	if(!guessIn.isNull())
 	{
 		guess = guessIn;
 	}
+	// 如果没有初始猜测但有IMU数据可用
 	else if(!imus_.empty())
 	{
 		// replace orientation guess with IMU (if available)
-		imuCurrentTransform = Transform::getTransform(imus_, data.stamp());
+		imuCurrentTransform = Transform::getTransform(imus_, data.stamp()); // 尝试从IMU数据中获取当前时间戳对应的变换
+		// 如果成功获取到当前和上一时刻的IMU变换
 		if(!imuCurrentTransform.isNull() && !imuLastTransform_.isNull())
 		{
+			// 计算两帧IMU之间的相对旋转变化
+        	// 使用上一帧的逆变换乘以当前帧变换得到相对变换
 			Transform orientation = imuLastTransform_.inverse() * imuCurrentTransform;
+
+			// 构建新的猜测变换：
+        	// 1. 使用IMU计算的旋转矩阵部分(3x3)
+        	// 2. 保留原有猜测的平移部分(x,y,z)
 			guess = Transform(
 					orientation.r11(), orientation.r12(), orientation.r13(), guess.x(),
 					orientation.r21(), orientation.r22(), orientation.r23(), guess.y(),
 					orientation.r31(), orientation.r32(), orientation.r33(), guess.z());
 			if(_force3DoF)
 			{
-				guess = guess.to3DoF();
+				guess = guess.to3DoF(); //将6自由度变换转换为3自由度变换（2D平面运动）返回只包含x,y平移和yaw旋转的变换矩阵
 			}
 		}
 		else if(!imuLastTransform_.isNull())
@@ -703,6 +716,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 	UTimer time;
 
 	// Deskewing lidar
+	// 雷达
 	if( _deskewing &&
 		!data.laserScanRaw().empty() &&
 		data.laserScanRaw().hasTime() &&
@@ -770,38 +784,55 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 	}
 
 
+	
 	Transform t;
+	// 检查是否需要进行图像降采样（满足以下两个条件）：
+	// 1. 降采样系数_imageDecimation大于1
+	// 2. 原始图像数据非空
 	if(_imageDecimation > 1 && !data.imageRaw().empty())
 	{
 		// Decimation of images with calibrations
+		// 创建数据副本用于降采样处理
 		SensorData decimatedData = data;
-		int decimationDepth = _imageDecimation;
+		int decimationDepth = _imageDecimation; // 深度图降采样系数（默认与RGB相同）
+
+		// 如果有有效的相机模型且图像尺寸已知
 		if(	!data.cameraModels().empty() &&
 			data.cameraModels()[0].imageHeight()>0 &&
 			data.cameraModels()[0].imageWidth()>0)
 		{
-			// decimate from RGB image size
+			// decimate from RGB image size 根据RGB图像尺寸计算目标尺寸
 			int targetSize = data.cameraModels()[0].imageHeight() / _imageDecimation;
+
+			// 如果目标尺寸大于等于原始深度图尺寸，则不降采样深度图
 			if(targetSize >= data.depthRaw().rows)
 			{
 				decimationDepth = 1;
 			}
 			else
 			{
+				// 否则按比例计算深度图降采样系数
 				decimationDepth = (int)ceil(float(data.depthRaw().rows) / float(targetSize));
 			}
 		}
 		UDEBUG("decimation rgbOrLeft(rows=%d)=%d, depthOrRight(rows=%d)=%d", data.imageRaw().rows, _imageDecimation, data.depthOrRightRaw().rows, decimationDepth);
 
+		// =============== 执行图像降采样 ===============
+        // 对RGB/左目图像进行降采样
 		cv::Mat rgbLeft = util2d::decimate(decimatedData.imageRaw(), _imageDecimation);
+		// 对深度图/右目图像进行降采样
 		cv::Mat depthRight = util2d::decimate(decimatedData.depthOrRightRaw(), decimationDepth);
+		// =============== 相机模型缩放 ===============
+    	// 处理单目相机模型
 		std::vector<CameraModel> cameraModels = decimatedData.cameraModels();
 		for(unsigned int i=0; i<cameraModels.size(); ++i)
 		{
+			// 按降采样比例缩放相机内参
 			cameraModels[i] = cameraModels[i].scaled(1.0/double(_imageDecimation));
 		}
 		if(!cameraModels.empty())
 		{
+			// 更新降采样后的RGBD数据
 			decimatedData.setRGBDImage(rgbLeft, depthRight, cameraModels);
 		}
 		else
@@ -809,35 +840,38 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			std::vector<StereoCameraModel> stereoModels = decimatedData.stereoCameraModels();
 			for(unsigned int i=0; i<stereoModels.size(); ++i)
 			{
-				stereoModels[i].scale(1.0/double(_imageDecimation));
+				stereoModels[i].scale(1.0/double(_imageDecimation)); // 按降采样比例缩放双目相机内参
 			}
 			if(!stereoModels.empty())
 			{
-				decimatedData.setStereoImage(rgbLeft, depthRight, stereoModels);
+				decimatedData.setStereoImage(rgbLeft, depthRight, stereoModels); // 更新降采样后的双目数据
 			}
 		}
 
 
-		// compute transform
+		// compute transform  使用降采样后的数据计算位姿变换
 		t = this->computeTransform(decimatedData, guess, info);
 
-		// transform back the keypoints in the original image
+		// transform back the keypoints in the original image 将特征点坐标映射回原始图像尺寸
 		std::vector<cv::KeyPoint> kpts = decimatedData.keypoints();
 		double log2value = log(double(_imageDecimation))/log(2.0);
 		for(unsigned int i=0; i<kpts.size(); ++i)
 		{
-			kpts[i].pt.x *= _imageDecimation;
-			kpts[i].pt.y *= _imageDecimation;
-			kpts[i].size *= _imageDecimation;
-			kpts[i].octave += log2value;
+			kpts[i].pt.x *= _imageDecimation; // 还原x坐标
+			kpts[i].pt.y *= _imageDecimation; // 还原y坐标
+			kpts[i].size *= _imageDecimation;  // 还原特征点尺寸
+			kpts[i].octave += log2value; // 更新金字塔层级
 		}
+		}
+		// 更新原始数据中的特征信息
 		data.setFeatures(kpts, decimatedData.keypoints3D(), decimatedData.descriptors());
 		data.setLaserScan(decimatedData.laserScanRaw());
 
 		if(info)
 		{
+			// 确保匹配点数量一致
 			UASSERT(info->newCorners.size() == info->refCorners.size() || info->refCorners.empty());
-			for(unsigned int i=0; i<info->newCorners.size(); ++i)
+			for(unsigned int i=0; i<info->newCorners.size(); ++i) // 还原匹配点坐标
 			{
 				info->newCorners[i].x *= _imageDecimation;
 				info->newCorners[i].y *= _imageDecimation;
@@ -847,6 +881,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 					info->refCorners[i].y *= _imageDecimation;
 				}
 			}
+			// 还原视觉词典特征点坐标
 			for(std::multimap<int, cv::KeyPoint>::iterator iter=info->words.begin(); iter!=info->words.end(); ++iter)
 			{
 				iter->second.pt.x *= _imageDecimation;
@@ -856,31 +891,43 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			}
 		}
 	}
+	// 处理包含有效传感器数据的情况：
+	// 1. 有原始图像数据 或
+	// 2. 有激光雷达数据 或
+	// 3. 支持异步IMU处理且IMU数据非空
 	else if(!data.imageRaw().empty() || !data.laserScanRaw().isEmpty() || (this->canProcessAsyncIMU() && !data.imu().empty()))
 	{
+		// 调用核心算法计算当前帧的位姿变换 默认F2M
+		// data: 包含传感器数据的结构体
+		// guess: 初始位姿猜测
+		// info: 存储计算过程和结果的调试信息
 		t = this->computeTransform(data, guess, info);
 	}
 
+	// 特殊处理：仅有IMU数据而无视觉/激光数据时
 	if(data.imageRaw().empty() && data.laserScanRaw().isEmpty() && !data.imu().empty())
 	{
-		return Transform(); // Return null on IMU-only updates
+		return Transform(); // Return null on IMU-only updates  返回空变换（表示仅IMU更新不产生位姿变化）
 	}
 
+	// 如果启用了调试信息记录
 	if(info)
 	{
-		info->timeEstimation = time.ticks();
-		info->lost = t.isNull();
-		info->stamp = data.stamp();
-		info->interval = dt;
-		info->transform = t;
-		info->guess = guess;
-		if(_publishRAMUsage)
+		info->timeEstimation = time.ticks(); // 记录位姿估计耗时（毫秒）
+		info->lost = t.isNull(); // 标记是否跟踪丢失（变换矩阵是否为空）
+		info->stamp = data.stamp(); // 记录当前帧时间戳
+		info->interval = dt; // 记录与上一帧的时间间隔
+		info->transform = t; // 存储计算得到的变换矩阵
+		info->guess = guess; // 存储使用的初始猜测值
+		if(_publishRAMUsage) // 如果启用了内存监控
 		{
-			info->memoryUsage = UProcessInfo::getMemoryUsage()/(1024*1024);
+			info->memoryUsage = UProcessInfo::getMemoryUsage()/(1024*1024); // 记录当前内存使用量（转换为MB）
 		}
 
+		// 如果有真实轨迹数据（用于评估算法精度）
 		if(!data.groundTruth().isNull())
 		{
+			// 计算相对于上一帧的真实位姿变化
 			if(!previousGroundTruthPose_.isNull())
 			{
 				info->transformGroundTruth = previousGroundTruthPose_.inverse() * data.groundTruth();
@@ -889,14 +936,18 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 		}
 	}
 
+	// 检查变换矩阵t是否有效（非空）
 	if(!t.isNull())
 	{
+		// 重置失败计数器（当获得有效位姿时重置）
 		_resetCurrentCount = _resetCountdown;
 
+		// 分解变换矩阵为平移和欧拉角（6自由度参数）
 		float vx,vy,vz, vroll,vpitch,vyaw;
 		t.getTranslationAndEulerAngles(vx,vy,vz, vroll,vpitch,vyaw);
 
 		// transform to velocity
+		// 如果有时间间隔dt，将位移转换为速度（单位时间变化量）
 		if(dt)
 		{
 			vx /= dt;
@@ -907,6 +958,8 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			vyaw /= dt;
 		}
 
+		/* 运动模型处理部分 */
+    	// 处理3DoF/非全向/粒子滤波/Kalman滤波等情况
 		if(_force3DoF || !_holonomic || particleFilters_.size() || _filteringStrategy==1)
 		{
 			if(_filteringStrategy == 1)
@@ -931,10 +984,12 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			}
 			else
 			{
+				// 粒子滤波策略
 				if(particleFilters_.size())
 				{
 					// Particle filtering
 					UASSERT(particleFilters_.size()==6);
+					// 初始化粒子滤波器
 					if(velocityGuess_.isNull())
 					{
 						particleFilters_[0]->init(vx);
@@ -946,14 +1001,18 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 					}
 					else
 					{
+						// 粒子滤波更新
 						vx = particleFilters_[0]->filter(vx);
 						vy = particleFilters_[1]->filter(vy);
 						vyaw = particleFilters_[5]->filter(vyaw);
 
+						// 非全向运动模型处理（弧线轨迹）
 						if(!_holonomic)
 						{
 							// arc trajectory around ICR
+							// 计算瞬时曲率中心(ICR)的弧线轨迹
 							float tmpY = vyaw!=0.0f ? vx / tan((CV_PI-vyaw)/2.0f) : 0.0f;
+							// 处理y方向速度约束
 							if(fabs(tmpY) < fabs(vy) || (tmpY<=0 && vy >=0) || (tmpY>=0 && vy<=0))
 							{
 								vy = tmpY;
@@ -964,7 +1023,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 							}
 						}
 
-						if(!_force3DoF)
+						if(!_force3DoF) // 如果不强制3DoF，更新其他自由度
 						{
 							vz = particleFilters_[2]->filter(vz);
 							vroll = particleFilters_[3]->filter(vroll);
@@ -977,6 +1036,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 						info->timeParticleFiltering = time.ticks();
 					}
 				}
+				// 纯非全向运动模型
 				else if(!_holonomic)
 				{
 					// arc trajectory around ICR
@@ -993,6 +1053,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 
 			if(dt)
 			{
+				// 根据dt将速度转换回位移量
 				t = Transform(vx*dt, vy*dt, vz*dt, vroll*dt, vpitch*dt, vyaw*dt);
 			}
 			else
@@ -1000,12 +1061,14 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 				t = Transform(vx, vy, vz, vroll, vpitch, vyaw);
 			}
 
+			/* 数据记录和更新部分 */
+    		// 更新滤波后的位姿
 			if(info)
 			{
 				info->transformFiltered = t;
 			}
 		}
-
+		// 时间戳检查
 		if(data.stamp() == 0 && framesProcessed_ != 0)
 		{
 			UWARN("Null stamp detected");
@@ -1013,15 +1076,18 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 
 		previousStamp_ = data.stamp();
 
+		// 速度估计处理
 		if(dt)
 		{
 			if(dt >= (guessSmoothingDelay_/2.0) || particleFilters_.size() || _filteringStrategy==1)
 			{
+				// 直接使用当前速度估计
 				velocityGuess_ = Transform(vx, vy, vz, vroll, vpitch, vyaw);
 				previousVelocities_.clear();
 			}
 			else
 			{
+				// 平滑速度估计（滑动窗口平均）
 				// smooth velocity estimation over the past X seconds
 				std::vector<float> v(6);
 				v[0] = vx;
@@ -1031,6 +1097,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 				v[4] = vpitch;
 				v[5] = vyaw;
 				previousVelocities_.push_back(std::make_pair(v, data.stamp()));
+				// 移除超出时间窗口的旧数据
 				while(previousVelocities_.size() > 1 && previousVelocities_.front().second < previousVelocities_.back().second-guessSmoothingDelay_)
 				{
 					previousVelocities_.pop_front();
@@ -1044,24 +1111,25 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			velocityGuess_.setNull();
 		}
 
+		// 更新里程计信息
 		if(info)
 		{
-			distanceTravelled_ += t.getNorm();
-			info->distanceTravelled = distanceTravelled_;
+			distanceTravelled_ += t.getNorm(); // 累计行驶距离
+			info->distanceTravelled = distanceTravelled_; 
 			info->guessVelocity = velocityGuess_;
 		}
 		++framesProcessed_;
 
-		imuLastTransform_ = imuCurrentTransform;
+		imuLastTransform_ = imuCurrentTransform; // 更新IMU数据
 
-		return _pose *= t; // update
+		return _pose *= t; // update  更新全局位姿
 	}
-	else if(_resetCurrentCount > 0)
+	else if(_resetCurrentCount > 0) // 位姿丢失处理
 	{
 		UWARN("Odometry lost! Odometry will be reset after next %d consecutive unsuccessful odometry updates...", _resetCurrentCount);
-
+		// 位姿丢失计数
 		--_resetCurrentCount;
-		if(_resetCurrentCount == 0)
+		if(_resetCurrentCount == 0) // 达到重置阈值
 		{
 			UWARN("Odometry automatically reset to latest pose!");
 			this->reset(_pose);
@@ -1073,7 +1141,7 @@ Transform Odometry::process(SensorData & data, const Transform & guessIn, Odomet
 			return this->computeTransform(data, Transform(), info);
 		}
 	}
-
+	// 位姿无效时的清理
 	previousVelocities_.clear();
 	velocityGuess_.setNull();
 	previousStamp_ = 0;
@@ -1173,33 +1241,60 @@ void Odometry::initKalmanFilter(const Transform & initialPose, float vx, float v
 	}
 }
 
+/**
+ * 使用卡尔曼滤波预测运动状态
+ * @param dt 时间间隔（单位：秒）
+ * @param vx 输出x轴方向速度（可选）
+ * @param vy 输出y轴方向速度（可选）
+ * @param vz 输出z轴方向速度（可选）
+ * @param vroll 输出绕x轴旋转速度（可选）
+ * @param vpitch 输出绕y轴旋转速度（可选）
+ * @param vyaw 输出绕z轴旋转速度（可选）
+ */
 void Odometry::predictKalmanFilter(float dt, float * vx, float * vy, float * vz, float * vroll, float * vpitch, float * vyaw)
 {
 	// Set transition matrix with current dt
-	if(_force3DoF)
+	// 根据当前dt设置状态转移矩阵
+	if(_force3DoF) // 如果是强制3自由度（2D平面运动）
 	{
-		// 2D:
-		//  [1 0 dt  0 dt2    0   0    0     0] x
-		//  [0 1  0 dt   0  dt2   0    0     0] y
-		//  [0 0  1  0   dt   0   0    0     0] x'
-		//  [0 0  0  1   0   dt   0    0     0] y'
-		//  [0 0  0  0   1    0   0    0     0] x''
-		//  [0 0  0  0   0    0   0    0     0] y''
-		//  [0 0  0  0   0    0   1   dt   dt2] yaw
-		//  [0 0  0  0   0    0   0    1    dt] yaw'
-		//  [0 0  0  0   0    0   0    0     1] yaw''
-		kalmanFilter_.transitionMatrix.at<float>(0,2) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(1,3) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(2,4) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(3,5) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(0,4) = 0.5*pow(dt,2);
-		kalmanFilter_.transitionMatrix.at<float>(1,5) = 0.5*pow(dt,2);
-		// orientation
-		kalmanFilter_.transitionMatrix.at<float>(6,7) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(7,8) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(6,8) = 0.5*pow(dt,2);
-	}
-	else
+		/* 2D运动状态转移矩阵说明（9x9矩阵）：
+         * 状态向量：[x, y, x', y', x'', y'', yaw, yaw', yaw'']
+         * 其中：'表示一阶导数（速度），''表示二阶导数（加速度）
+         *
+         * 矩阵结构：
+         * [1 0 dt  0 dt2    0   0    0     0]  // x位置 = x + x'*dt + 0.5*x''*dt2
+         * [0 1  0 dt   0  dt2   0    0     0]  // y位置 = y + y'*dt + 0.5*y''*dt2
+         * [0 0  1  0   dt   0   0    0     0]  // x速度 = x' + x''*dt
+         * [0 0  0  1   0   dt   0    0     0]  // y速度 = y' + y''*dt
+         * [0 0  0  0   1    0   0    0     0]  // x加速度保持不变
+         * [0 0  0  0   0    1   0    0     0]  // y加速度保持不变
+         * [0 0  0  0   0    0   1   dt   dt2]  // 偏航角 = yaw + yaw'*dt + 0.5*yaw''*dt2
+         * [0 0  0  0   0    0   0    1    dt]  // 偏航速度 = yaw' + yaw''*dt
+         * [0 0  0  0   0    0   0    0     1]  // 偏航加速度保持不变
+         */
+
+		// 设置位置相关转移系数
+		kalmanFilter_.transitionMatrix.at<float>(0,2) = dt; // x = x + x'*dt
+		kalmanFilter_.transitionMatrix.at<float>(1,3) = dt; // y = y + y'*dt
+		kalmanFilter_.transitionMatrix.at<float>(2,4) = dt; // x' = x' + x''*dt
+		kalmanFilter_.transitionMatrix.at<float>(3,5) = dt; // y' = y' + y''*dt
+		kalmanFilter_.transitionMatrix.at<float>(0,4) = 0.5*pow(dt,2); // x = x + 0.5*x''*dt2
+		kalmanFilter_.transitionMatrix.at<float>(1,5) = 0.5*pow(dt,2); // y = y + 0.5*y''*dt2
+		// orientation设置姿态相关转移系数
+		kalmanFilter_.transitionMatrix.at<float>(6,7) = dt; // yaw = yaw + yaw'*dt
+		kalmanFilter_.transitionMatrix.at<float>(7,8) = dt; // yaw' = yaw' + yaw''*dt
+		kalmanFilter_.transitionMatrix.at<float>(6,8) = 0.5*pow(dt,2); // yaw = yaw + 0.5*ya
+	} 
+	else // 6自由度（3D空间运动）
+
+	/* 3D运动状态转移矩阵说明（18x18矩阵）：
+         * 状态向量：[x,y,z, x',y',z', x'',y'',z'', roll,pitch,yaw, roll',pitch',yaw', roll'',pitch'',yaw'']
+         *
+         * 矩阵结构类似2D情况，但扩展到3D空间：
+         * 前9行对应位置、速度、加速度（x,y,z三个维度）
+         * 后9行对应姿态角、角速度、角加速度（roll,pitch,yaw三个维度）
+         */
+
 	{
 		//  [1 0 0 dt  0  0 dt2   0   0 0 0 0  0  0  0   0   0   0] x
 		//  [0 1 0  0 dt  0   0 dt2   0 0 0 0  0  0  0   0   0   0] y
@@ -1220,31 +1315,33 @@ void Odometry::predictKalmanFilter(float dt, float * vx, float * vy, float * vz,
 		//  [0 0 0  0  0  0   0   0   0 0 0 0  0  0  0   0   1   0]
 		//  [0 0 0  0  0  0   0   0   0 0 0 0  0  0  0   0   0   1]
 		// position
-		kalmanFilter_.transitionMatrix.at<float>(0,3) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(1,4) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(2,5) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(3,6) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(4,7) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(5,8) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(0,6) = 0.5*pow(dt,2);
-		kalmanFilter_.transitionMatrix.at<float>(1,7) = 0.5*pow(dt,2);
-		kalmanFilter_.transitionMatrix.at<float>(2,8) = 0.5*pow(dt,2);
+		kalmanFilter_.transitionMatrix.at<float>(0,3) = dt; // x = x + x'*dt
+		kalmanFilter_.transitionMatrix.at<float>(1,4) = dt; // y = y + y'*dt
+		kalmanFilter_.transitionMatrix.at<float>(2,5) = dt; // z = z + z'*dt
+		kalmanFilter_.transitionMatrix.at<float>(3,6) = dt; // x' = x' + x''*dt
+		kalmanFilter_.transitionMatrix.at<float>(4,7) = dt; // y' = y' + y''*dt
+		kalmanFilter_.transitionMatrix.at<float>(5,8) = dt; // z' = z' + z''*dt
+		kalmanFilter_.transitionMatrix.at<float>(0,6) = 0.5*pow(dt,2); // x = x + 0.5*x''*dt2
+		kalmanFilter_.transitionMatrix.at<float>(1,7) = 0.5*pow(dt,2); // y = y + 0.5*y''*dt2
+		kalmanFilter_.transitionMatrix.at<float>(2,8) = 0.5*pow(dt,2); // z = z + 0.5*z''*dt2
 		// orientation
-		kalmanFilter_.transitionMatrix.at<float>(9,12) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(10,13) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(11,14) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(12,15) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(13,16) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(14,17) = dt;
-		kalmanFilter_.transitionMatrix.at<float>(9,15) = 0.5*pow(dt,2);
-		kalmanFilter_.transitionMatrix.at<float>(10,16) = 0.5*pow(dt,2);
-		kalmanFilter_.transitionMatrix.at<float>(11,17) = 0.5*pow(dt,2);
+		kalmanFilter_.transitionMatrix.at<float>(9,12) = dt; // roll = roll + roll'*dt
+		kalmanFilter_.transitionMatrix.at<float>(10,13) = dt; // pitch = pitch + pitch'*dt
+		kalmanFilter_.transitionMatrix.at<float>(11,14) = dt; // yaw = yaw + yaw'*dt
+		kalmanFilter_.transitionMatrix.at<float>(12,15) = dt; // roll' = roll' + roll''*dt
+		kalmanFilter_.transitionMatrix.at<float>(13,16) = dt; // pitch' = pitch' + pitch''*dt
+		kalmanFilter_.transitionMatrix.at<float>(14,17) = dt;  // yaw' = yaw' + yaw''*dt
+		kalmanFilter_.transitionMatrix.at<float>(9,15) = 0.5*pow(dt,2); // roll = roll + 0.5*roll''*dt2
+		kalmanFilter_.transitionMatrix.at<float>(10,16) = 0.5*pow(dt,2); // pitch = pitch + 0.5*pitch''*dt2
+		kalmanFilter_.transitionMatrix.at<float>(11,17) = 0.5*pow(dt,2); // yaw = yaw + 0.5*yaw''*dt2
 	}
 
 	// First predict, to update the internal statePre variable
+	// 执行预测步骤，更新内部状态(statePre)
 	UDEBUG("Predict");
 	const cv::Mat & prediction = kalmanFilter_.predict();
 
+	// 从预测结果中提取需要的速度值（如果输出参数不为空）
 	if(vx)
 		*vx = prediction.at<float>(3);                      // x'
 	if(vy)

@@ -203,96 +203,122 @@ void OdometryF2M::reset(const Transform & initialPose)
 }
 
 // return not null transform if odometry is correctly computed
+/**
+ * F2M（Frame-to-Map）里程计核心计算函数
+ * @param data 输入传感器数据（图像+深度/激光+IMU）
+ * @param guessIn 初始位姿猜测（通常来自IMU或运动模型）
+ * @param info 输出调试信息
+ * @return 计算得到的位姿变换（空表示失败）
+ */
 Transform OdometryF2M::computeTransform(
 		SensorData & data,
 		const Transform & guessIn,
 		OdometryInfo * info)
 {
-	Transform guess = guessIn;
-	UTimer timer;
-	Transform output;
+	Transform guess = guessIn; // 初始化位姿猜测
+	UTimer timer; // 性能计时器
+	Transform output; // 输出变换结果
 
 	if(info)
 	{
 		info->type = 0;
 	}
 
+	// =============== IMU处理 ===============
 	Transform imuT;
 	if(sba_ && sba_->gravitySigma() > 0.0f && !imus().empty())
 	{
+		// 获取当前时间戳的IMU姿态
 		imuT = Transform::getTransform(imus(), data.stamp());
 		if(data.imu().empty())
 		{
+			// 如果数据中没有IMU信息，用估计的姿态填充
 			Eigen::Quaternionf q = imuT.getQuaternionf();
 			data.setIMU(IMU(cv::Vec4d(q.x(), q.y(), q.z(), q.w()), cv::Mat(), cv::Vec3d(), cv::Mat(), cv::Vec3d(), cv::Mat()));
 		}
 	}
 
-	RegistrationInfo regInfo;
-	int nFeatures = 0;
+	// =============== 初始化变量 ===============
+	RegistrationInfo regInfo; // 注册信息（匹配结果）
+	int nFeatures = 0; // 特征点计数
 
+	// 处理帧数据（生成唯一ID）
 	delete lastFrame_;
 	int id = data.id();
-	data.setId(++bundleSeq_); // generate our own unique ids, to make sure they are correctly set
-	lastFrame_ = new Signature(data);
+	data.setId(++bundleSeq_); // generate our own unique ids, to make sure they are correctly set  生成自增的唯一ID
+	lastFrame_ = new Signature(data); // 创建当前帧特征签名
 	data.setId(id);
 
+	// 关键帧相关标志
 	bool addKeyFrame = false;
-	int totalBundleWordReferencesUsed = 0;
-	int totalBundleOutliers = 0;
+	int totalBundleWordReferencesUsed = 0; 
+	int totalBundleOutliers = 0; // 统计在捆绑调整过程中被标记为异常值(outliers)的数量
 	float bundleTime = 0.0f;
+	// 深度图处理参数
+	// 可视化深度图时是否将其作为掩码(mask)显示的标志变量
 	bool visDepthAsMask = Parameters::defaultVisDepthAsMask();
-	Parameters::parse(parameters_, Parameters::kVisDepthAsMask(), visDepthAsMask);
+	Parameters::parse(parameters_, Parameters::kVisDepthAsMask(), visDepthAsMask); // 如果配置中存在对应参数，则更新visDepthAsMask的值；否则保持默认值
 
+	
+	// =============== 相机模型处理 ===============
 	std::vector<CameraModel> lastFrameModels;
+	// 检查上一帧数据是否存在有效的单目相机模型
 	if(!lastFrame_->sensorData().cameraModels().empty() &&
 		lastFrame_->sensorData().cameraModels().at(0).isValidForProjection())
 	{
+		 // 单目模式：直接使用单目相机模型
 		lastFrameModels = lastFrame_->sensorData().cameraModels();
 	}
 	else if(!lastFrame_->sensorData().stereoCameraModels().empty() &&
 			lastFrame_->sensorData().stereoCameraModels().at(0).isValidForProjection())
 	{
+		// 双目模式：将双目相机模型转换为单目形式（左相机）+ 基线参数
 		for(size_t i=0; i<lastFrame_->sensorData().stereoCameraModels().size(); ++i)
 		{
+			// 获取左相机模型作为基础
 			CameraModel model = lastFrame_->sensorData().stereoCameraModels()[i].left();
 			// Set Tx for stereo BA
+			// 设置双目基线参数
 			model = CameraModel(model.fx(),
 					model.fy(),
 					model.cx(),
 					model.cy(),
-					model.localTransform(),
-					-lastFrame_->sensorData().stereoCameraModels()[i].baseline()*model.fx(),
+					model.localTransform(), // 相机本地变换矩阵
+					-lastFrame_->sensorData().stereoCameraModels()[i].baseline()*model.fx(), // 计算Tx（水平偏移参数）
 					model.imageSize());
 			lastFrameModels.push_back(model);
 		}
 	}
 	UDEBUG("lastFrameModels=%ld", lastFrameModels.size());
 
+	// =============== 核心处理流程 ===============
 	// Generate keypoints from the new data
 	if(lastFrame_->sensorData().isValid())
 	{
+		// 检查是否有可用的地图数据（特征点或激光扫描
 		if((map_->getWords3().size() || !map_->sensorData().laserScanRaw().isEmpty()) &&
 			lastFrame_->sensorData().isValid())
 		{
-			Signature tmpMap;
-			Transform transform;
+			Signature tmpMap; // 用于存储临时地图数据（特征点、传感器数据等）
+			Transform transform; // 存储计算得到的位姿变换矩阵
 			UDEBUG("guess=%s frames=%d image required=%d", guess.prettyPrint().c_str(), this->framesProcessed(), regPipeline_->isImageRequired()?1:0);
 
 			// bundle adjustment stuff if used
-			std::map<int, cv::Point3f> points3DMap;
-			std::map<int, Transform> bundlePoses;
-			std::multimap<int, Link> bundleLinks;
-			std::map<int, std::vector<CameraModel> > bundleModels;
-			float bundleAvgInlierDistance = 0.0f;
+			// BA相关变量
+			std::map<int, cv::Point3f> points3DMap; // 3D点地图（关键点ID到3D坐标的映射）
+			std::map<int, Transform> bundlePoses; // 待优化的位姿集合（帧ID到位姿变换）
+			std::multimap<int, Link> bundleLinks; // 帧间约束关系（多对多关系）
+			std::map<int, std::vector<CameraModel> > bundleModels; // 各帧对应的相机模型
+			float bundleAvgInlierDistance = 0.0f; // 优化后的平均内点重投影误差
 
+			// 配准尝试循环（最多尝试两次：带猜测和不带猜测）
 			for(int guessIteration=0;
 					guessIteration<(!guess.isNull()&&regPipeline_->isImageRequired()?2:1) && transform.isNull();
-					++guessIteration)
+					++guessIteration) // 循环条件：如果有初始猜测且需要图像则尝试两次
 			{
 				tmpMap = *map_;
 				// reset matches, but keep already extracted features in lastFrame_->sensorData()
-				lastFrame_->removeAllWords();
+				lastFrame_->removeAllWords();  // 清除之前的匹配
 
 				points3DMap.clear();
 				bundlePoses.clear();

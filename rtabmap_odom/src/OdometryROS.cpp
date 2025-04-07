@@ -629,8 +629,10 @@ void OdometryROS::mainLoop()
 	}
 
 	Transform groundTruth;
+	// 检查是否有有效的传感器数据
 	if(!data.imageRaw().empty() || !data.laserScanRaw().isEmpty())
 	{
+		// 情况1：检测到时间戳不连续（新时间戳不大于之前的时间戳）
 		if(previousStamp_>0.0 && previousStamp_ >= rtabmap_conversions::timestampFromROS(header.stamp))
 		{
 			RCLCPP_WARN(this->get_logger(), "Odometry: Detected not valid consecutive stamps (previous=%fs new=%fs). "

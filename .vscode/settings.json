@@ -82,5 +82,6 @@
         "future": "cpp",
         "valarray": "cpp",
         "nonlinearoptimization": "cpp"
-    }
+    },
+    "cmake.sourceDirectory": "/home/shakima/公共的/rtab_map/rtabmap"
 }
